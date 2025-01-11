@@ -1,36 +1,34 @@
 import crypto from 'crypto';
 
 // Advanced timing constants
-const ANALYSIS_WINDOW = 30 * 1000; // 30 seconds
-const PATTERN_MEMORY = 5 * 60 * 1000; // 5 minutes
-const CACHE_CLEANUP_INTERVAL = 60 * 1000; // 1 minute
+const ANALYSIS_WINDOW = 30 * 1000;
+const PATTERN_MEMORY = 5 * 60 * 1000;
+const CACHE_CLEANUP_INTERVAL = 60 * 1000;
 
-// Cache structures
+// Cache structures with TTL
 const clientPatterns = new Map();
 const behaviorCache = new Map();
 const legitimateClients = new WeakSet();
 
-/**
- * Advanced Browser Fingerprinting and Verification System
- * Sophisticated browser environment validation
- */
 class BrowserVerification {
     static generateFingerprint(req) {
-        const browserComponents = [
+        // Enhanced fingerprinting using more sophisticated components
+        const components = [
             req.headers['user-agent'],
             req.headers['accept'],
             req.headers['accept-language'],
             req.headers['accept-encoding'],
-            req.headers['sec-ch-ua'],
-            req.headers['sec-ch-ua-platform'],
-            req.headers['sec-fetch-dest'],
-            req.headers['sec-fetch-mode'],
-            req.headers['sec-fetch-site']
+            req.headers['connection'],
+            req.headers['upgrade-insecure-requests'],
+            req.headers['viewport-width'],
+            req.headers['sec-ch-ua-full-version-list'],
+            req.headers['sec-ch-ua-platform-version'],
+            req.ip
         ].filter(Boolean);
 
         return crypto
             .createHash('sha256')
-            .update(browserComponents.join(':|:'))
+            .update(components.join(':|:'))
             .digest('hex');
     }
 
@@ -39,109 +37,174 @@ class BrowserVerification {
         let score = 0;
         const maxScore = 100;
 
-        // Required modern browser headers
-        const requiredHeaders = [
-            'sec-ch-ua',
-            'sec-ch-ua-platform',
-            'sec-ch-ua-mobile',
-            'sec-fetch-site',
-            'sec-fetch-mode',
-            'sec-fetch-dest',
-            'accept',
-            'accept-encoding',
-            'accept-language'
+        // Smart header scoring system
+        score += this.calculateHeaderScore(headers);
+        score += this.analyzeUserAgent(headers['user-agent']);
+        score += this.checkConsistency(headers);
+        score += this.validateSpecialHeaders(headers);
+
+        return {
+            valid: score >= 40, // Lower threshold for legitimate users
+            score,
+            maxScore,
+            details: {
+                headers: headers['user-agent'],
+                score: score
+            }
+        };
+    }
+
+    static calculateHeaderScore(headers) {
+        let score = 0;
+        
+        // Essential browser headers
+        if (headers['user-agent']) score += 20;
+        if (headers['accept']) score += 10;
+        if (headers['accept-language']) score += 10;
+        if (headers['accept-encoding']) score += 10;
+        
+        // Security-related headers
+        if (headers['sec-fetch-site']) score += 5;
+        if (headers['sec-fetch-mode']) score += 5;
+        if (headers['sec-fetch-dest']) score += 5;
+        
+        return score;
+    }
+
+    static validateSpecialHeaders(headers) {
+        let score = 0;
+        const botIndicators = [
+            'selenium', 'webdriver', 'headless', 'phantom',
+            'puppeteer', 'playwright', 'cypress', 'automation',
+            'metamask', 'bot', 'crawler', 'spider'
         ];
 
-        // Score header presence and validity
-        for (const header of requiredHeaders) {
-            if (headers[header]) {
-                score += 10;
-                // Additional points for correct format
-                if (this.validateHeaderFormat(header, headers[header])) {
-                    score += 5;
-                }
+        // Negative scoring for bot indicators
+        const userAgent = headers['user-agent']?.toLowerCase() || '';
+        botIndicators.forEach(indicator => {
+            if (userAgent.includes(indicator)) score -= 50;
+        });
+
+        // JavaScript engine consistency check
+        if (headers['sec-ch-ua']) {
+            const ua = headers['sec-ch-ua'].toLowerCase();
+            if (ua.includes('"chromium"') && !userAgent.toLowerCase().includes('chrome')) {
+                score -= 30;
             }
         }
 
-        // User-Agent analysis
-        if (headers['user-agent']) {
-            score += this.analyzeUserAgent(headers['user-agent']);
-        }
-
-        return {
-            valid: score >= 70,
-            score,
-            maxScore
-        };
-    }
-
-    static validateHeaderFormat(header, value) {
-        const patterns = {
-            'sec-ch-ua': /"[^"]*"|v="[^"]*"/,
-            'sec-ch-ua-mobile': /^\?[01]$/,
-            'sec-ch-ua-platform': /"[^"]*"/,
-            'sec-fetch-site': /^(none|same-origin|same-site|cross-site)$/,
-            'sec-fetch-mode': /^(navigate|same-origin|no-cors|cors)$/,
-            'sec-fetch-dest': /^(document|script|style|image|font)$/
-        };
-
-        return !patterns[header] || patterns[header].test(value);
+        return score;
     }
 
     static analyzeUserAgent(ua) {
+        if (!ua) return -50;
         let score = 0;
+        const lowerUA = ua.toLowerCase();
         
-        // Check for standard browser patterns
-        if (/Chrome\/[\d.]+/.test(ua)) score += 5;
-        if (/Firefox\/[\d.]+/.test(ua)) score += 5;
-        if (/Safari\/[\d.]+/.test(ua)) score += 5;
-        if (/Edge\/[\d.]+/.test(ua)) score += 5;
-        if (/Mobile/.test(ua)) score += 5;
+        // Popular legitimate browsers
+        const browsers = {
+            'chrome': /chrome\/[\d.]+/i,
+            'firefox': /firefox\/[\d.]+/i,
+            'safari': /safari\/[\d.]+/i,
+            'edge': /edg(e)?\/[\d.]+/i,
+            'opera': /opr\/[\d.]+/i
+        };
 
-        // Check for OS patterns
-        if (/Windows NT [\d.]+/.test(ua)) score += 5;
-        if (/Macintosh.*Mac OS X [\d_]+/.test(ua)) score += 5;
-        if (/Linux/.test(ua)) score += 5;
-        if (/Android [\d.]+/.test(ua)) score += 5;
-        if (/iPhone OS [\d_]+/.test(ua)) score += 5;
+        // OS patterns
+        const operatingSystems = {
+            'windows': /windows nt [\d.]+/i,
+            'mac': /macintosh.*mac os x [\d._]+/i,
+            'ios': /iphone os [\d._]+/i,
+            'android': /android [\d.]+/i,
+            'linux': /linux/i
+        };
+
+        // Score browser match
+        Object.entries(browsers).some(([name, pattern]) => {
+            if (pattern.test(lowerUA)) {
+                score += 15;
+                return true;
+            }
+        });
+
+        // Score OS match
+        Object.entries(operatingSystems).some(([name, pattern]) => {
+            if (pattern.test(lowerUA)) {
+                score += 15;
+                return true;
+            }
+        });
+
+        // Check for version number consistency
+        const versionPattern = /(\d+\.)+\d+/;
+        if (versionPattern.test(ua)) score += 10;
+
+        return score;
+    }
+
+    static checkConsistency(headers) {
+        let score = 0;
+
+        // Platform consistency
+        if (headers['sec-ch-ua-platform'] && headers['user-agent']) {
+            const platform = headers['sec-ch-ua-platform'].toLowerCase();
+            const ua = headers['user-agent'].toLowerCase();
+            
+            if (platform.includes('windows') && ua.includes('windows')) score += 10;
+            if (platform.includes('mac') && ua.includes('macintosh')) score += 10;
+            if (platform.includes('android') && ua.includes('android')) score += 10;
+            if (platform.includes('ios') && ua.includes('iphone')) score += 10;
+        }
+
+        // Mobile consistency
+        if (headers['sec-ch-ua-mobile']) {
+            const isMobile = headers['sec-ch-ua-mobile'] === '?1';
+            const ua = headers['user-agent']?.toLowerCase() || '';
+            const uaIndicatesMobile = /mobile|android|iphone|ipad|ipod/i.test(ua);
+            
+            if (isMobile === uaIndicatesMobile) score += 10;
+        }
 
         return score;
     }
 }
 
-/**
- * Advanced Behavioral Analysis
- * Sophisticated pattern recognition for human-like behavior
- */
 class BehaviorAnalysis {
     static analyze(req, fingerprint) {
         const now = Date.now();
         let clientData = behaviorCache.get(fingerprint) || {
             patterns: [],
             lastSeen: now,
-            score: 0
+            score: 0,
+            suspicious: 0
         };
 
         // Update patterns
-        clientData.patterns.push({
+        const pattern = {
             timestamp: now,
             path: req.path,
             method: req.method,
             headers: this.getRelevantHeaders(req.headers)
-        });
+        };
 
-        // Maintain pattern window
-        clientData.patterns = clientData.patterns.filter(p => 
-            now - p.timestamp < PATTERN_MEMORY
-        );
+        clientData.patterns.push(pattern);
+        clientData.patterns = clientData.patterns.filter(p => now - p.timestamp < PATTERN_MEMORY);
 
-        // Analyze behavior
         const analysis = this.analyzeBehaviorPatterns(clientData.patterns);
+        
+        // Update client data
         clientData.score = this.calculateBehaviorScore(analysis);
         clientData.lastSeen = now;
-
+        clientData.suspicious = analysis.suspicious;
+        
         behaviorCache.set(fingerprint, clientData);
-        return analysis;
+        
+        return {
+            humanLike: analysis.confidence >= 0.4,
+            confidence: analysis.confidence,
+            details: analysis.details,
+            suspicious: clientData.suspicious
+        };
     }
 
     static getRelevantHeaders(headers) {
@@ -149,23 +212,41 @@ class BehaviorAnalysis {
             encoding: headers['accept-encoding'],
             language: headers['accept-language'],
             cache: headers['cache-control'],
-            connection: headers['connection']
+            connection: headers['connection'],
+            platform: headers['sec-ch-ua-platform']
         };
     }
 
     static analyzeBehaviorPatterns(patterns) {
-        if (patterns.length < 2) return { humanLike: true, confidence: 0.5 };
+        if (patterns.length < 2) {
+            return { 
+                confidence: 0.7,
+                suspicious: 0,
+                details: { timing: 1, navigation: 1, headers: 1 }
+            };
+        }
 
         const timing = this.analyzeTimingPatterns(patterns);
         const navigation = this.analyzeNavigationPatterns(patterns);
         const headers = this.analyzeHeaderConsistency(patterns);
 
-        const confidence = (timing + navigation + headers) / 3;
+        // Weight the factors based on importance
+        const confidence = timing * 0.3 + navigation * 0.4 + headers * 0.3;
+        const suspicious = this.calculateSuspiciousScore(timing, navigation, headers);
+
         return {
-            humanLike: confidence >= 0.7,
             confidence,
+            suspicious,
             details: { timing, navigation, headers }
         };
+    }
+
+    static calculateSuspiciousScore(timing, navigation, headers) {
+        let score = 0;
+        if (timing < 0.3) score++;
+        if (navigation < 0.3) score++;
+        if (headers < 0.3) score++;
+        return score;
     }
 
     static analyzeTimingPatterns(patterns) {
@@ -174,134 +255,134 @@ class BehaviorAnalysis {
             intervals.push(patterns[i].timestamp - patterns[i-1].timestamp);
         }
 
-        // Human-like characteristics:
-        // - Variable intervals (not too regular)
-        // - Natural pauses
-        // - No impossible speeds
-        
-        const avgInterval = intervals.reduce((a,b) => a + b, 0) / intervals.length;
-        const variability = intervals.reduce((acc, interval) => 
-            acc + Math.abs(interval - avgInterval), 0) / intervals.length;
+        if (intervals.length === 0) return 1;
 
-        // Score based on natural timing patterns
-        return Math.min(variability / 1000, 1);
+        // Calculate mean and standard deviation
+        const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const variance = intervals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / intervals.length;
+        const stdDev = Math.sqrt(variance);
+
+        // Check for too-regular patterns (bot-like)
+        const isRegular = stdDev < 100; // Less than 100ms variation
+        
+        // Check for impossible speeds
+        const hasTooFast = intervals.some(i => i < 50); // Faster than 50ms
+
+        if (isRegular && hasTooFast) return 0;
+        if (isRegular) return 0.3;
+        if (hasTooFast) return 0.5;
+
+        return 1;
     }
 
     static analyzeNavigationPatterns(patterns) {
-        // Analyze typical user navigation flows
-        const flows = patterns.map(p => p.path);
+        const paths = patterns.map(p => p.path);
         let score = 1;
 
-        // Penalize repetitive patterns
-        const uniquePaths = new Set(flows).size;
-        if (uniquePaths === 1 && patterns.length > 3) {
-            score *= 0.5;
-        }
+        // Penalize for highly repetitive patterns
+        const repetition = this.calculateRepetition(paths);
+        score *= (1 - repetition);
 
-        // Penalize non-standard navigation
-        if (!this.hasNormalNavigationFlow(flows)) {
+        // Check if navigation follows logical flow
+        if (!this.hasLogicalFlow(paths)) {
             score *= 0.7;
         }
 
         return score;
     }
 
-    static hasNormalNavigationFlow(paths) {
-        // Check for logical page progression
-        const validSequences = [
-            /^\/$/,
-            /^\/check-ip$/,
-            /^\/loading/,
-            /^\/review/
-        ];
+    static calculateRepetition(paths) {
+        if (paths.length < 3) return 0;
 
-        let matchCount = 0;
-        paths.forEach(path => {
-            validSequences.some(pattern => {
-                if (pattern.test(path)) matchCount++;
-                return pattern.test(path);
-            });
-        });
-
-        return matchCount / paths.length >= 0.7;
-    }
-
-    static analyzeHeaderConsistency(patterns) {
-        // Check for consistent but not identical headers
-        const headerSets = patterns.map(p => p.headers);
-        let consistency = 1;
-
-        // Headers should be similar but not identical
-        for (let i = 1; i < headerSets.length; i++) {
-            const prev = headerSets[i-1];
-            const curr = headerSets[i];
-            
-            // Compare essential headers
-            if (prev.language !== curr.language) consistency *= 0.8;
-            if (prev.encoding !== curr.encoding) consistency *= 0.8;
+        let repetitions = 0;
+        for (let i = 2; i < paths.length; i++) {
+            if (paths[i] === paths[i-1] && paths[i-1] === paths[i-2]) {
+                repetitions++;
+            }
         }
 
-        return consistency;
+        return Math.min(repetitions / (paths.length - 2), 1);
     }
 
-    static calculateBehaviorScore(analysis) {
-        return analysis.confidence * 100;
+    static hasLogicalFlow(paths) {
+        const validFlows = [
+            ['/'], // Root
+            ['/', '/check-ip'], // Initial flow
+            ['/check-ip', '/loading'], // Normal progression
+            ['/loading', '/review'], // Expected flow
+            ['/review', '/complete'] // Completion
+        ];
+
+        for (let i = 1; i < paths.length; i++) {
+            const currentPair = [paths[i-1], paths[i]];
+            if (!validFlows.some(flow => 
+                flow[0].includes(currentPair[0]) && 
+                flow[1].includes(currentPair[1])
+            )) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
-/**
- * Main Bot Detection Function
- */
 export async function detectBot(req) {
     const fingerprint = BrowserVerification.generateFingerprint(req);
     
-    // Quick return for known legitimate clients
+    // Quick pass for known legitimate clients
     if (legitimateClients.has(req)) {
         return { isBot: false, confidence: 1 };
     }
 
-    // Browser environment verification
+    // Browser environment check
     const browserCheck = BrowserVerification.validateBrowserEnvironment(req);
-    if (!browserCheck.valid) {
+    
+    // Immediate fail for obvious bots
+    if (browserCheck.score < 20) {
         return { 
             isBot: true, 
-            confidence: 0.9,
+            confidence: 0.95,
             reason: 'invalid_browser_environment',
-            score: browserCheck.score
+            score: browserCheck.score,
+            details: browserCheck.details
         };
     }
 
     // Behavioral analysis
     const behavior = BehaviorAnalysis.analyze(req, fingerprint);
-    if (!behavior.humanLike) {
+    
+    // Multiple failed behavior checks
+    if (!behavior.humanLike && behavior.suspicious > 1) {
         return {
             isBot: true,
-            confidence: behavior.confidence,
+            confidence: 0.85,
             reason: 'suspicious_behavior',
             details: behavior.details
         };
     }
 
-    // Mark as legitimate if passing all checks
-    legitimateClients.add(req);
-    
+    // Pass if behavior looks human-like
+    if (browserCheck.score >= 40 && behavior.confidence >= 0.4) {
+        legitimateClients.add(req);
+        return {
+            isBot: false,
+            confidence: behavior.confidence,
+            fingerprint
+        };
+    }
+
+    // Default to suspicious but not definitely bot
     return {
-        isBot: false,
-        confidence: behavior.confidence,
-        fingerprint
+        isBot: true,
+        confidence: 0.6,
+        reason: 'combined_factors',
+        details: {
+            browser: browserCheck.score,
+            behavior: behavior.details
+        }
     };
 }
-
-// Cleanup stale data
-setInterval(() => {
-    const now = Date.now();
-    
-    for (const [fingerprint, data] of behaviorCache.entries()) {
-        if (now - data.lastSeen > PATTERN_MEMORY) {
-            behaviorCache.delete(fingerprint);
-        }
-    }
-}, CACHE_CLEANUP_INTERVAL);
 
 export const antiBotUtils = {
     BrowserVerification,
