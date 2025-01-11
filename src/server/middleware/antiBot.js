@@ -12,7 +12,6 @@ const legitimateClients = new WeakSet();
 
 class BrowserVerification {
     static generateFingerprint(req) {
-        // Enhanced fingerprinting using more sophisticated components
         const components = [
             req.headers['user-agent'],
             req.headers['accept'],
@@ -44,7 +43,7 @@ class BrowserVerification {
         score += this.validateSpecialHeaders(headers);
 
         return {
-            valid: score >= 40, // Lower threshold for legitimate users
+            valid: score >= 40,
             score,
             maxScore,
             details: {
@@ -57,13 +56,11 @@ class BrowserVerification {
     static calculateHeaderScore(headers) {
         let score = 0;
         
-        // Essential browser headers
         if (headers['user-agent']) score += 20;
         if (headers['accept']) score += 10;
         if (headers['accept-language']) score += 10;
         if (headers['accept-encoding']) score += 10;
         
-        // Security-related headers
         if (headers['sec-fetch-site']) score += 5;
         if (headers['sec-fetch-mode']) score += 5;
         if (headers['sec-fetch-dest']) score += 5;
@@ -79,13 +76,11 @@ class BrowserVerification {
             'metamask', 'bot', 'crawler', 'spider'
         ];
 
-        // Negative scoring for bot indicators
         const userAgent = headers['user-agent']?.toLowerCase() || '';
         botIndicators.forEach(indicator => {
             if (userAgent.includes(indicator)) score -= 50;
         });
 
-        // JavaScript engine consistency check
         if (headers['sec-ch-ua']) {
             const ua = headers['sec-ch-ua'].toLowerCase();
             if (ua.includes('"chromium"') && !userAgent.toLowerCase().includes('chrome')) {
@@ -101,7 +96,6 @@ class BrowserVerification {
         let score = 0;
         const lowerUA = ua.toLowerCase();
         
-        // Popular legitimate browsers
         const browsers = {
             'chrome': /chrome\/[\d.]+/i,
             'firefox': /firefox\/[\d.]+/i,
@@ -110,7 +104,6 @@ class BrowserVerification {
             'opera': /opr\/[\d.]+/i
         };
 
-        // OS patterns
         const operatingSystems = {
             'windows': /windows nt [\d.]+/i,
             'mac': /macintosh.*mac os x [\d._]+/i,
@@ -119,7 +112,6 @@ class BrowserVerification {
             'linux': /linux/i
         };
 
-        // Score browser match
         Object.entries(browsers).some(([name, pattern]) => {
             if (pattern.test(lowerUA)) {
                 score += 15;
@@ -127,7 +119,6 @@ class BrowserVerification {
             }
         });
 
-        // Score OS match
         Object.entries(operatingSystems).some(([name, pattern]) => {
             if (pattern.test(lowerUA)) {
                 score += 15;
@@ -135,7 +126,6 @@ class BrowserVerification {
             }
         });
 
-        // Check for version number consistency
         const versionPattern = /(\d+\.)+\d+/;
         if (versionPattern.test(ua)) score += 10;
 
@@ -145,7 +135,6 @@ class BrowserVerification {
     static checkConsistency(headers) {
         let score = 0;
 
-        // Platform consistency
         if (headers['sec-ch-ua-platform'] && headers['user-agent']) {
             const platform = headers['sec-ch-ua-platform'].toLowerCase();
             const ua = headers['user-agent'].toLowerCase();
@@ -156,7 +145,6 @@ class BrowserVerification {
             if (platform.includes('ios') && ua.includes('iphone')) score += 10;
         }
 
-        // Mobile consistency
         if (headers['sec-ch-ua-mobile']) {
             const isMobile = headers['sec-ch-ua-mobile'] === '?1';
             const ua = headers['user-agent']?.toLowerCase() || '';
@@ -179,7 +167,6 @@ class BehaviorAnalysis {
             suspicious: 0
         };
 
-        // Update patterns
         const pattern = {
             timestamp: now,
             path: req.path,
@@ -191,8 +178,6 @@ class BehaviorAnalysis {
         clientData.patterns = clientData.patterns.filter(p => now - p.timestamp < PATTERN_MEMORY);
 
         const analysis = this.analyzeBehaviorPatterns(clientData.patterns);
-        
-        // Update client data
         clientData.score = this.calculateBehaviorScore(analysis);
         clientData.lastSeen = now;
         clientData.suspicious = analysis.suspicious;
@@ -205,6 +190,23 @@ class BehaviorAnalysis {
             details: analysis.details,
             suspicious: clientData.suspicious
         };
+    }
+
+    static calculateBehaviorScore(analysis) {
+        if (!analysis) return 0;
+
+        const { confidence, suspicious, details } = analysis;
+        let score = confidence * 100;
+        score -= (suspicious * 20);
+
+        if (details) {
+            const { timing, navigation, headers } = details;
+            if (timing < 0.3) score -= 30;
+            if (navigation < 0.5) score -= 20;
+            if (headers < 0.5) score -= 20;
+        }
+
+        return Math.max(0, Math.min(100, score));
     }
 
     static getRelevantHeaders(headers) {
@@ -230,7 +232,6 @@ class BehaviorAnalysis {
         const navigation = this.analyzeNavigationPatterns(patterns);
         const headers = this.analyzeHeaderConsistency(patterns);
 
-        // Weight the factors based on importance
         const confidence = timing * 0.3 + navigation * 0.4 + headers * 0.3;
         const suspicious = this.calculateSuspiciousScore(timing, navigation, headers);
 
@@ -257,16 +258,12 @@ class BehaviorAnalysis {
 
         if (intervals.length === 0) return 1;
 
-        // Calculate mean and standard deviation
         const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
         const variance = intervals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / intervals.length;
         const stdDev = Math.sqrt(variance);
 
-        // Check for too-regular patterns (bot-like)
-        const isRegular = stdDev < 100; // Less than 100ms variation
-        
-        // Check for impossible speeds
-        const hasTooFast = intervals.some(i => i < 50); // Faster than 50ms
+        const isRegular = stdDev < 100;
+        const hasTooFast = intervals.some(i => i < 50);
 
         if (isRegular && hasTooFast) return 0;
         if (isRegular) return 0.3;
@@ -279,11 +276,9 @@ class BehaviorAnalysis {
         const paths = patterns.map(p => p.path);
         let score = 1;
 
-        // Penalize for highly repetitive patterns
         const repetition = this.calculateRepetition(paths);
         score *= (1 - repetition);
 
-        // Check if navigation follows logical flow
         if (!this.hasLogicalFlow(paths)) {
             score *= 0.7;
         }
@@ -306,11 +301,11 @@ class BehaviorAnalysis {
 
     static hasLogicalFlow(paths) {
         const validFlows = [
-            ['/'], // Root
-            ['/', '/check-ip'], // Initial flow
-            ['/check-ip', '/loading'], // Normal progression
-            ['/loading', '/review'], // Expected flow
-            ['/review', '/complete'] // Completion
+            ['/'],
+            ['/', '/check-ip'],
+            ['/check-ip', '/loading'],
+            ['/loading', '/review'],
+            ['/review', '/complete']
         ];
 
         for (let i = 1; i < paths.length; i++) {
@@ -325,20 +320,32 @@ class BehaviorAnalysis {
 
         return true;
     }
+
+    static analyzeHeaderConsistency(patterns) {
+        const headerSets = patterns.map(p => p.headers);
+        let consistency = 1;
+
+        for (let i = 1; i < headerSets.length; i++) {
+            const prev = headerSets[i-1];
+            const curr = headerSets[i];
+            
+            if (prev.language !== curr.language) consistency *= 0.8;
+            if (prev.encoding !== curr.encoding) consistency *= 0.8;
+        }
+
+        return consistency;
+    }
 }
 
 export async function detectBot(req) {
     const fingerprint = BrowserVerification.generateFingerprint(req);
     
-    // Quick pass for known legitimate clients
     if (legitimateClients.has(req)) {
         return { isBot: false, confidence: 1 };
     }
 
-    // Browser environment check
     const browserCheck = BrowserVerification.validateBrowserEnvironment(req);
     
-    // Immediate fail for obvious bots
     if (browserCheck.score < 20) {
         return { 
             isBot: true, 
@@ -349,10 +356,8 @@ export async function detectBot(req) {
         };
     }
 
-    // Behavioral analysis
     const behavior = BehaviorAnalysis.analyze(req, fingerprint);
     
-    // Multiple failed behavior checks
     if (!behavior.humanLike && behavior.suspicious > 1) {
         return {
             isBot: true,
@@ -362,7 +367,6 @@ export async function detectBot(req) {
         };
     }
 
-    // Pass if behavior looks human-like
     if (browserCheck.score >= 40 && behavior.confidence >= 0.4) {
         legitimateClients.add(req);
         return {
@@ -372,7 +376,6 @@ export async function detectBot(req) {
         };
     }
 
-    // Default to suspicious but not definitely bot
     return {
         isBot: true,
         confidence: 0.6,
@@ -383,6 +386,15 @@ export async function detectBot(req) {
         }
     };
 }
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [fingerprint, data] of behaviorCache.entries()) {
+        if (now - data.lastSeen > PATTERN_MEMORY) {
+            behaviorCache.delete(fingerprint);
+        }
+    }
+}, CACHE_CLEANUP_INTERVAL);
 
 export const antiBotUtils = {
     BrowserVerification,
