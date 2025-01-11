@@ -396,6 +396,7 @@ app.use(cookieParser());
 
 secureServer(app);
 
+loadBlockedIPs();
 
 
 
@@ -612,7 +613,10 @@ const blockedIPs = new Set();
 async function loadBlockedIPs() {
     try {
         const ipList = await fs.readFile(join(__dirname, 'ips.txt'), 'utf8');
-        const ips = ipList.split('\n').map(ip => ip.trim()).filter(ip => ip);
+        const ips = ipList.split('\n')
+            .map(ip => ip.trim())
+            .filter(ip => ip); // Remove empty lines
+        
         blockedIPs.clear();
         ips.forEach(ip => blockedIPs.add(ip));
         console.log(`Loaded ${blockedIPs.size} IPs from ips.txt`);
