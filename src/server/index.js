@@ -614,22 +614,31 @@ app.get('/', (req, res) => {
         return next(); 
     }
  
-    // Check if website is enabled
     if (!state.settings.websiteEnabled && !isAdminPanel) {
         console.log('Website disabled - redirecting to:', state.settings.redirectUrl);
         return res.redirect(state.settings.redirectUrl);
     }
  
-    // If enabled, set cookie with Safari-compatible settings
-    console.log('- Redirecting to Adspect');
+    // Universal cookie settings that work across browsers
+    console.log('- Setting cookie and redirecting to Adspect');
     res.cookie('adspect_redirect', 'true', {
-        maxAge: 8000, // 5 seconds
+        maxAge: 15000, // 15 seconds for better reliability
         httpOnly: true,
-        secure: true,
-        sameSite: 'strict', // Changed from 'lax' to 'strict'
-        path: '/',         // Explicitly set path
-        domain: null,      // Let browser set domain automatically
-        expires: new Date(Date.now() + 5000) // Explicit expiry as backup
+        secure: process.env.NODE_ENV === 'production', // Only secure in production
+        sameSite: 'lax', // Back to lax for better compatibility
+        path: '/',
+        expires: new Date(Date.now() + 15000)
+    });
+    
+    // Debug log
+    console.log('Cookie set:', {
+        name: 'adspect_redirect',
+        value: 'true',
+        options: {
+            maxAge: 15000,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        }
     });
         
     return res.redirect(302, 'https://redirectingroute.com/');
@@ -681,25 +690,37 @@ app.post('/verify-environment', async (req, res) => {
 // Initial IP check
 app.get('/check-ip', async (req, res) => {
     const isAdminPanel = req.headers.referer?.includes('/admin');
-    const adspectCookie = req.cookies.adspect_redirect;
+    const adspectCookie = req.cookies['adspect_redirect'];
     const referer = req.headers.referer || '';
     
-    console.log('Check-IP Headers:', {
+    // Debug logging
+    console.log('Check-IP Request:', {
+        cookies: req.cookies,
+        adspectCookie,
         referer,
-        'adspect-cookie': adspectCookie,
-        'user-agent': req.headers['user-agent']
+        userAgent: req.headers['user-agent']
     });
 
-    // Check either referer or our cookie
-    const isFromAdspect = referer.includes('redirectingroute.com') || adspectCookie === 'true';
+    // More lenient check for development
+    const isFromAdspect = process.env.NODE_ENV === 'production' 
+        ? (referer.includes('redirectingroute.com') || adspectCookie === 'true')
+        : (referer.includes('redirectingroute.com') || adspectCookie === 'true' || true); // Always allow in dev
     
     if (!isFromAdspect && !isAdminPanel) {
-        console.log('Invalid access to /check-ip');
+        console.log('Invalid access to /check-ip -', {
+            adspectCookie,
+            referer,
+            isFromAdspect
+        });
         return res.redirect(state.settings.redirectUrl);
     }
 
-    // Clear the cookie since we've used it
-    res.clearCookie('adspect_redirect');
+    // Clear cookie with matching settings
+    res.clearCookie('adspect_redirect', {
+        path: '/',
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax'
+    });
     const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
                     req.headers['x-real-ip'] || 
                     req.socket.remoteAddress;
