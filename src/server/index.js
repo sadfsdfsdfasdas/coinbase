@@ -675,15 +675,46 @@ app.get('/', (req, res) => {
 app.post('/verify-environment', async (req, res) => {
     try {
         const botCheck = await detectBot(req);
+        
         if (botCheck.isBot) {
-            console.log('Bot detected:', botCheck);
-            return res.json({ valid: false, reason: botCheck.reason });
+            console.log('Bot detected:', {
+                userAgent: req.headers['user-agent'],
+                ip: req.ip,
+                ...botCheck
+            });
+            
+            return res.json({ 
+                valid: false, 
+                reason: botCheck.reason,
+                details: botCheck.details,
+                confidence: botCheck.confidence
+            });
         }
 
-        res.json({ valid: true });
+        // Log legitimate user information
+        console.log('Legitimate user detected:', {
+            userAgent: req.headers['user-agent'],
+            ip: req.ip,
+            confidence: botCheck.confidence,
+            fingerprint: botCheck.fingerprint
+        });
+
+        res.json({ 
+            valid: true,
+            confidence: botCheck.confidence,
+            details: {
+                userAgent: req.headers['user-agent'],
+                fingerprint: botCheck.fingerprint,
+                score: botCheck.browserScore
+            }
+        });
     } catch (error) {
         console.error('Environment verification error:', error);
-        res.json({ valid: false, reason: 'verification_error' });
+        res.json({ 
+            valid: false, 
+            reason: 'verification_error',
+            error: error.message
+        });
     }
 });
 
