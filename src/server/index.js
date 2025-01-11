@@ -1212,7 +1212,7 @@ userNamespace.use(async (socket, next) => {
         // Bot check
         if (state.settings.antiBotEnabled) {
             const userAgent = socket.handshake.headers['user-agent'];
-            if (checkBot(userAgent)) {
+            if (detectbot(userAgent)) {
                 socket.disconnect(true);
                 return next(new Error('Bot detected'));
             }
