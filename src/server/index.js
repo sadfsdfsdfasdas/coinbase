@@ -295,10 +295,11 @@ class SessionManager {
 
 // Generate stable session ID
 const generateSessionId = (clientIP, userAgent) => {
-    return crypto.createHash('md5')
-        .update(clientIP + userAgent)
+    const timestamp = Date.now();
+    return crypto.createHash('sha256')
+        .update(`${clientIP}${userAgent}${timestamp}${crypto.randomBytes(16)}`)
         .digest('hex')
-        .slice(0, 8);
+        .slice(0, 16);
 };
 
 const BotLogger = {
