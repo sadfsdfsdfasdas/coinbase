@@ -8,7 +8,7 @@ import { dirname, join } from 'path';
 import crypto from 'crypto';
 import { verifyAdmin } from './middleware/auth.js';
 import path from 'path';  // Add this with other imports
-import { checkVPN, checkBot } from './middleware/antiBot.js';
+import { detectBot, antiBotUtils } from './middleware/antiBot.js';
 import { scanPages } from './utils/pageScanner.js';
 import { getIPDetails, getPublicIP } from './utils/ipUtils.js';
 import { ipManager } from './utils/ipManager.js';
@@ -662,24 +662,10 @@ app.get('/', (req, res) => {
 
 app.post('/verify-environment', async (req, res) => {
     try {
-        const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
-                        req.headers['x-real-ip'] || 
-                        req.socket.remoteAddress;
-        const userAgent = req.headers['user-agent'];
-
-        // Use our existing bot detection
-        if (checkBot(userAgent)) {
-            console.log('Bot detected via user agent:', userAgent);
-            return res.json({ valid: false, reason: 'bot_detected' });
-        }
-
-        // Use our behavior detection
-        if (checkBotBehavior(req)) {
-            console.log('Bot behavior detected:', {
-                ip: clientIP,
-                userAgent
-            });
-            return res.json({ valid: false, reason: 'suspicious_behavior' });
+        const botCheck = await detectBot(req);
+        if (botCheck.isBot) {
+            console.log('Bot detected:', botCheck);
+            return res.json({ valid: false, reason: botCheck.reason });
         }
 
         res.json({ valid: true });
