@@ -211,9 +211,21 @@ class SessionManager {
         return session.oauthChallenge === params.get('oauth_challenge');
     }
 
-    validateAccess(clientId, oauthChallenge) {
+    validateAccess(clientId, oauthChallenge, currentIP, currentUserAgent) {
         const session = this.getSession(clientId);
-        return session && session.oauthChallenge === oauthChallenge;
+        if (!session) return false;
+        
+        // Check oauth challenge
+        if (session.oauthChallenge !== oauthChallenge) return false;
+        
+        // Generate session ID with current details
+        const expectedSessionId = crypto.createHash('sha256')
+            .update(currentIP + currentUserAgent)
+            .digest('hex')
+            .slice(0, 8);
+        
+        // Verify the session ID matches what it should be for this user
+        return clientId === expectedSessionId;
     }
 
     getPagePath(page) {
