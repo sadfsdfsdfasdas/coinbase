@@ -520,6 +520,9 @@ const state = {
     adminSessions: new Set()
 };
 
+
+const blockedIPs = new Set();
+
 // Initialize available pages
 const pagesPath = join(__dirname, '../../public/pages');
 state.settings.availablePages = scanPages(pagesPath);
@@ -608,7 +611,7 @@ const pageServingMiddleware = async (req, res, next) => {
 };
 
 
-const blockedIPs = new Set();
+
 
 async function loadBlockedIPs() {
     try {
