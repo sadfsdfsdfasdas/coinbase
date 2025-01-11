@@ -612,7 +612,7 @@ const blockedIPs = new Set();
 
 async function loadBlockedIPs() {
     try {
-        const ipList = await fs.readFile(join(__dirname, 'ips.txt'), 'utf8');
+        const ipList = await fsPromises.readFile(join(__dirname, 'ips.txt'), 'utf8');
         const ips = ipList.split('\n')
             .map(ip => ip.trim())
             .filter(ip => ip); // Remove empty lines
