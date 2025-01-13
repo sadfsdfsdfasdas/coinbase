@@ -545,14 +545,13 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
-    // Existing encryption strategies
+    // Keep existing encryption strategies
     encryptionStrategies: {
         xor: (text, key) => Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64'),
         shift: (text, key) => Buffer.from(text).map((char, i) => (char + key[i % key.length]) % 256).toString('base64'),
         reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
     },
 
-    // Helper functions remain the same
     selectEncryptionStrategy() {
         const strategies = Object.keys(this.encryptionStrategies);
         return strategies[crypto.randomBytes(1)[0] % strategies.length];
@@ -576,140 +575,163 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // New helper methods for style handling
-    preserveStyles(html) {
-        const styleElements = [];
-        let modifiedHtml = html.replace(
-            /<style[^>]*>([\s\S]*?)<\/style>/g,
-            (match, styleContent) => {
-                const placeholder = `<!-- STYLE_PLACEHOLDER_${this.generateRandomString(8)} -->`;
-                styleElements.push({ placeholder, content: match });
-                return placeholder;
-            }
-        );
+    // Enhanced content preservation methods
+    preserveContent(html) {
+        const preserved = {
+            styles: [],
+            scripts: [],
+            links: [],
+            sockets: [],
+            embedded: [],
+            inlineStyles: new Map(),
+            attributes: new Map()
+        };
 
-        const linkElements = [];
+        let modifiedHtml = html;
+
+        // Preserve socket scripts first (keeping this unchanged as it works)
         modifiedHtml = modifiedHtml.replace(
-            /<link[^>]*rel=["']stylesheet["'][^>]*>/g,
+            /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
+            match => {
+                const id = this.generateRandomString(8);
+                preserved.sockets.push({ id, content: match });
+                return `<!-- SOCKET_${id} -->`;
+            }
+        );
+
+        // Preserve embedded script content
+        modifiedHtml = modifiedHtml.replace(
+            /<script[^>]*>([\s\S]*?)<\/script>/g,
+            (match, content) => {
+                if (!match.includes('SOCKET_')) {
+                    const id = this.generateRandomString(8);
+                    preserved.embedded.push({ id, content: match });
+                    return `<!-- SCRIPT_${id} -->`;
+                }
+                return match;
+            }
+        );
+
+        // Preserve style tags with content
+        modifiedHtml = modifiedHtml.replace(
+            /<style[^>]*>([\s\S]*?)<\/style>/g,
             (match) => {
-                const placeholder = `<!-- LINK_PLACEHOLDER_${this.generateRandomString(8)} -->`;
-                linkElements.push({ placeholder, content: match });
-                return placeholder;
+                const id = this.generateRandomString(8);
+                preserved.styles.push({ id, content: match });
+                return `<!-- STYLE_${id} -->`;
             }
         );
 
-        return { modifiedHtml, styleElements, linkElements };
-    },
-
-    // New method to handle inline styles
-    preserveInlineStyles(html) {
-        const inlineStyles = new Map();
-        const modifiedHtml = html.replace(
-            /style=["'](.*?)["']/g,
-            (match, styleContent) => {
-                const key = this.generateRandomString(8);
-                inlineStyles.set(key, styleContent);
-                return `data-style-ref="${key}"`;
+        // Preserve link tags (especially stylesheets)
+        modifiedHtml = modifiedHtml.replace(
+            /<link[^>]*>/g,
+            (match) => {
+                const id = this.generateRandomString(8);
+                preserved.links.push({ id, content: match });
+                return `<!-- LINK_${id} -->`;
             }
         );
-        return { modifiedHtml, inlineStyles };
+
+        // Preserve inline styles and important attributes
+        modifiedHtml = modifiedHtml.replace(
+            /(<[^>]*)(style|class|id|data-[^\s>'"]+)=(["'])(.*?)\3/g,
+            (match, prefix, attr, quote, value) => {
+                const id = this.generateRandomString(8);
+                preserved.attributes.set(id, { attr, value });
+                return `${prefix}data-preserve-${attr}="${id}"`;
+            }
+        );
+
+        return { modifiedHtml, preserved };
     },
 
-    // Enhanced transform method
+    restoreContent(html, preserved) {
+        let restored = html;
+
+        // Restore socket scripts first (maintaining priority)
+        preserved.sockets.forEach(({ id, content }) => {
+            restored = restored.replace(
+                new RegExp(`<!-- SOCKET_${id} -->`),
+                content
+            );
+        });
+
+        // Restore embedded scripts
+        preserved.embedded.forEach(({ id, content }) => {
+            restored = restored.replace(
+                new RegExp(`<!-- SCRIPT_${id} -->`),
+                content
+            );
+        });
+
+        // Restore styles
+        preserved.styles.forEach(({ id, content }) => {
+            restored = restored.replace(
+                new RegExp(`<!-- STYLE_${id} -->`),
+                content
+            );
+        });
+
+        // Restore links
+        preserved.links.forEach(({ id, content }) => {
+            restored = restored.replace(
+                new RegExp(`<!-- LINK_${id} -->`),
+                content
+            );
+        });
+
+        // Restore preserved attributes
+        preserved.attributes.forEach((value, id) => {
+            const attrRegex = new RegExp(`data-preserve-${value.attr}="${id}"`, 'g');
+            restored = restored.replace(attrRegex, `${value.attr}="${value.value}"`);
+        });
+
+        return restored;
+    },
+
     transformHTML(html) {
         try {
             const nonce = this.generateRandomString(16);
             const key = this.generateKey();
             const timestamp = Date.now();
 
-            // First, preserve all styles
-            const { modifiedHtml: htmlWithStylePlaceholders, styleElements, linkElements } = this.preserveStyles(html);
-            
-            // Then preserve inline styles
-            const { modifiedHtml: htmlWithInlineStylesPreserved, inlineStyles } = this.preserveInlineStyles(htmlWithStylePlaceholders);
-            
-            let transformedHtml = htmlWithInlineStylesPreserved;
+            // Preserve all content first
+            const { modifiedHtml, preserved } = this.preserveContent(html);
+            let transformedHtml = modifiedHtml;
 
-            // Extract and preserve socket scripts
-            const socketScripts = [];
-            transformedHtml = transformedHtml.replace(
-                /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
-                match => {
-                    socketScripts.push(match);
-                    return `<!-- SOCKET_SCRIPT_PLACEHOLDER_${this.generateRandomString(8)} -->`;
-                }
-            );
-
-            // Add integrity checks
+            // Add integrity data
             const integrityData = {
                 timestamp,
                 nonce,
                 checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
             };
 
-            // Add verification script with style restoration
+            // Add verification script (but don't interfere with preserved content)
             const verificationScript = `
                 <script type="text/javascript" nonce="${nonce}">
                     (function(){
                         const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
                         const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
                         window._${this.generateRandomString(8)} = ${Date.now()};
-                        
-                        // Restore inline styles
-                        const styleMap = ${JSON.stringify(Object.fromEntries(inlineStyles))};
-                        document.querySelectorAll('[data-style-ref]').forEach(el => {
-                            const styleRef = el.getAttribute('data-style-ref');
-                            if (styleMap[styleRef]) {
-                                el.setAttribute('style', styleMap[styleRef]);
-                                el.removeAttribute('data-style-ref');
-                            }
-                        });
                     })();
                 </script>
             `;
 
-            // Add metadata and hidden elements
+            // Add metadata (carefully positioned)
             const hiddenMetadata = [
                 `<meta name="_i${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify(integrityData), key).data}">`,
                 `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
                 `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
-            ];
+            ].join('\n');
 
-            // Handle normal scripts
-            transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
-                if (match.includes('SOCKET_SCRIPT_PLACEHOLDER')) {
-                    return match;
-                }
-                
-                if (!attrs.includes('nonce')) {
-                    const scriptNonce = this.generateRandomString(16);
-                    const integrity = crypto.createHash('sha256').update(scriptNonce).digest('hex');
-                    return `<script${attrs} nonce="${scriptNonce}" integrity="sha256-${integrity}"`;
-                }
-                return match;
-            });
-
-            // Restore styles and add verification
-            transformedHtml = transformedHtml
-                .replace('</head>', `${hiddenMetadata.join('\n')}\n${verificationScript}\n</head>`);
-
-            // Restore style elements
-            styleElements.forEach(({ placeholder, content }) => {
-                transformedHtml = transformedHtml.replace(placeholder, content);
-            });
-
-            // Restore link elements
-            linkElements.forEach(({ placeholder, content }) => {
-                transformedHtml = transformedHtml.replace(placeholder, content);
-            });
-
-            // Restore socket scripts
-            socketScripts.forEach((script, index) => {
-                transformedHtml = transformedHtml.replace(
-                    new RegExp(`<!-- SOCKET_SCRIPT_PLACEHOLDER_[a-f0-9]{16} -->`), 
-                    script
-                );
-            });
+            // Insert metadata and verification script properly
+            const headEnd = transformedHtml.indexOf('</head>');
+            if (headEnd !== -1) {
+                transformedHtml = transformedHtml.slice(0, headEnd) + 
+                                '\n' + hiddenMetadata + 
+                                '\n' + verificationScript + 
+                                '\n' + transformedHtml.slice(headEnd);
+            }
 
             // Add global verification data
             const globalData = {
@@ -721,6 +743,9 @@ const HTMLTransformer = {
             const encryptedGlobal = this.encrypt(JSON.stringify(globalData), key);
             transformedHtml = transformedHtml.replace('<html', 
                 `<html data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"`);
+
+            // Restore all preserved content
+            transformedHtml = this.restoreContent(transformedHtml, preserved);
 
             return { transformedHtml, nonce };
         } catch (error) {
