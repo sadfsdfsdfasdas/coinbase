@@ -572,23 +572,18 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
+    // Generate safe noise that won't interfere with HTML structure or execution
     generateNoiseElements() {
         const noiseTypes = [
-            // Hidden divs with random IDs
-            () => `<div style="display:none" data-noise="${this.generateRandomString(8)}"></div>`,
-            // Comments with random content
+            // Comments are the safest form of noise
             () => `<!-- ${this.generateRandomString(32)} -->`,
-            // Meta tags with random content
-            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}">`,
-            // Zero-width spans with random data attributes
-            () => `<span style="width:0;height:0;position:absolute;left:-9999px" data-n="${this.generateRandomString(8)}"></span>`,
-            // Empty script tags with random nonces (but no content to execute)
-            () => `<script nonce="${this.generateRandomString(16)}"></script>`,
-            // Hidden iframes with random src attributes (pointing nowhere)
-            () => `<iframe style="display:none" srcdoc="" data-n="${this.generateRandomString(8)}"></iframe>`
+            // Data elements that won't affect layout or execution
+            () => `<div aria-hidden="true" style="display:none!important;width:0!important;height:0!important;position:absolute!important;top:-9999px!important;left:-9999px!important;" data-noise="${this.generateRandomString(8)}"></div>`,
+            // Hidden metadata that won't affect rendering
+            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}" data-noise="true">`,
         ];
 
-        const numElements = 5 + Math.floor(crypto.randomBytes(1)[0] % 10);
+        const numElements = 3 + Math.floor(crypto.randomBytes(1)[0] % 5); // Keep noise count reasonable
         const elements = [];
         
         for(let i = 0; i < numElements; i++) {
@@ -599,140 +594,107 @@ const HTMLTransformer = {
         return elements.join('\n');
     },
 
-    // New method to preserve ALL scripts (both socket and regular)
-    preserveScripts(html) {
-        const scripts = {
-            sockets: [],
-            regular: []
+    // Safely inject noise at HTML boundaries without modifying original content
+    injectNoiseAtBoundaries(html) {
+        // Parse HTML boundaries without modifying content
+        const boundaries = {
+            htmlStart: html.indexOf('<html'),
+            headStart: html.indexOf('<head>'),
+            headEnd: html.indexOf('</head>'),
+            bodyStart: html.indexOf('<body'),
+            bodyEnd: html.indexOf('</body>')
         };
-        
-        // First step: Preserve socket scripts
-        let modifiedHtml = html.replace(
-            /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
-            match => {
-                const id = this.generateRandomString(8);
-                scripts.sockets.push({ id, content: match });
-                return `<!-- SOCKET_${id} -->`;
-            }
-        );
 
-        // Second step: Preserve ALL other scripts (keeping them exactly as they are)
-        modifiedHtml = modifiedHtml.replace(
-            /<script\b[^>]*>[\s\S]*?<\/script>/g,
-            match => {
-                // Skip if it's already a socket placeholder
-                if (match.includes('SOCKET_')) {
-                    return match;
-                }
-                const id = this.generateRandomString(8);
-                scripts.regular.push({ id, content: match });
-                return `<!-- SCRIPT_${id} -->`;
-            }
-        );
+        // Generate boundary markers for precise insertion
+        const markers = {
+            beforeHead: boundaries.headStart !== -1 ? boundaries.headStart + 6 : -1,
+            afterHead: boundaries.headEnd,
+            beforeBody: boundaries.bodyStart !== -1 ? 
+                boundaries.bodyStart + html.slice(boundaries.bodyStart).indexOf('>') + 1 : -1,
+            afterBody: boundaries.bodyEnd
+        };
 
-        return { modifiedHtml, scripts };
+        // Inject noise only if we can safely identify boundaries
+        let result = html;
+
+        // Add metadata attributes to html tag without breaking structure
+        if (boundaries.htmlStart !== -1) {
+            const htmlAttrs = [
+                `data-v="${this.generateRandomString(12)}"`,
+                `data-n="${this.generateRandomString(8)}"`,
+                `data-t="${Date.now()}"`,
+            ].join(' ');
+
+            result = result.slice(0, boundaries.htmlStart) +
+                    `<html ${htmlAttrs} ` +
+                    result.slice(boundaries.htmlStart + 5);
+        }
+
+        // Inject noise at safe points
+        if (markers.beforeHead !== -1) {
+            result = result.slice(0, markers.beforeHead) +
+                    '\n' + this.generateNoiseElements() +
+                    result.slice(markers.beforeHead);
+        }
+
+        if (markers.afterHead !== -1) {
+            result = result.slice(0, markers.afterHead) +
+                    '\n' + this.generateNoiseElements() +
+                    result.slice(markers.afterHead);
+        }
+
+        if (markers.beforeBody !== -1) {
+            result = result.slice(0, markers.beforeBody) +
+                    '\n' + this.generateNoiseElements() +
+                    result.slice(markers.beforeBody);
+        }
+
+        if (markers.afterBody !== -1) {
+            result = result.slice(0, markers.afterBody) +
+                    '\n' + this.generateNoiseElements() +
+                    result.slice(markers.afterBody);
+        }
+
+        return result;
     },
 
     transformHTML(html) {
         try {
-            const nonce = this.generateRandomString(16);
             const key = this.generateKey();
-            const timestamp = Date.now();
-
-            // Preserve ALL scripts first
-            const { modifiedHtml: htmlWithScripts, scripts } = this.preserveScripts(html);
-            let transformedHtml = htmlWithScripts;
-
-            // Add integrity data
-            const integrityData = {
-                timestamp,
-                nonce,
-                checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
-            };
-
-            // Add verification script
-            const verificationScript = `
+            const nonce = this.generateRandomString(16);
+            
+            // Add integrity check script without modifying any existing scripts
+            const integrityScript = `
                 <script type="text/javascript" nonce="${nonce}">
                     (function(){
-                        const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
-                        const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
-                        window._${this.generateRandomString(8)} = ${Date.now()};
-                        // Add some harmless noise variables
-                        const _${this.generateRandomString(6)} = '${this.generateRandomString(16)}';
-                        const _${this.generateRandomString(6)} = [${Array(5).fill().map(() => `'${this.generateRandomString(8)}'`)}];
-                        const _${this.generateRandomString(6)} = {${Array(3).fill().map(() => `'${this.generateRandomString(4)}':'${this.generateRandomString(8)}'`)}};
+                        const _${this.generateRandomString(4)} = ${Date.now()};
+                        const _${this.generateRandomString(4)} = "${this.generateRandomString(16)}";
+                        window._${this.generateRandomString(8)} = {
+                            t: _${this.generateRandomString(4)},
+                            n: "${nonce}",
+                            v: "${this.generateRandomString(12)}"
+                        };
                     })();
                 </script>
             `;
 
-            // Add random noise
-            const noiseBeforeHead = this.generateNoiseElements();
-            const noiseAfterHead = this.generateNoiseElements();
-            const noiseBeforeBody = this.generateNoiseElements();
-            const noiseAfterBody = this.generateNoiseElements();
-
-            // Insert noise and metadata
-            const headIndex = transformedHtml.indexOf('<head>');
-            const headEndIndex = transformedHtml.indexOf('</head>');
-            const bodyIndex = transformedHtml.indexOf('<body');
-            const bodyEndIndex = transformedHtml.indexOf('</body>');
-
-            if (headIndex !== -1 && headEndIndex !== -1) {
+            // Find safe insertion point for integrity script
+            const headEnd = html.indexOf('</head>');
+            let transformedHtml = html;
+            if (headEnd !== -1) {
                 transformedHtml = 
-                    transformedHtml.slice(0, headIndex + 6) + 
-                    '\n' + noiseBeforeHead + 
-                    '\n' + verificationScript + 
-                    '\n' + noiseAfterHead + 
-                    transformedHtml.slice(headIndex + 6, headEndIndex) +
-                    transformedHtml.slice(headEndIndex);
+                    transformedHtml.slice(0, headEnd) +
+                    '\n' + integrityScript +
+                    transformedHtml.slice(headEnd);
             }
 
-            if (bodyIndex !== -1 && bodyEndIndex !== -1) {
-                transformedHtml = 
-                    transformedHtml.slice(0, bodyIndex + transformedHtml.slice(bodyIndex).indexOf('>') + 1) +
-                    '\n' + noiseBeforeBody +
-                    transformedHtml.slice(bodyIndex + transformedHtml.slice(bodyIndex).indexOf('>') + 1, bodyEndIndex) +
-                    '\n' + noiseAfterBody +
-                    transformedHtml.slice(bodyEndIndex);
-            }
-
-            // Add random attributes to html tag
-            const htmlStart = transformedHtml.indexOf('<html');
-            if (htmlStart !== -1) {
-                const randomAttrs = [
-                    `data-v="${this.encrypt(JSON.stringify(integrityData), key).data}"`,
-                    `data-s="${this.selectEncryptionStrategy()}"`,
-                    `data-n="${this.generateRandomString(12)}"`,
-                    `data-t="${Buffer.from(timestamp.toString()).toString('base64')}"`,
-                    `data-h="${crypto.createHash('sha256').update(html).digest('hex').slice(0, 12)}"`
-                ].join(' ');
-
-                transformedHtml = 
-                    transformedHtml.slice(0, htmlStart) +
-                    `<html ${randomAttrs} ` +
-                    transformedHtml.slice(htmlStart + 5);
-            }
-
-            // Restore ALL scripts in the correct order
-            // First restore socket scripts
-            scripts.sockets.forEach(({ id, content }) => {
-                transformedHtml = transformedHtml.replace(
-                    new RegExp(`<!-- SOCKET_${id} -->`),
-                    content
-                );
-            });
-
-            // Then restore regular scripts
-            scripts.regular.forEach(({ id, content }) => {
-                transformedHtml = transformedHtml.replace(
-                    new RegExp(`<!-- SCRIPT_${id} -->`),
-                    content
-                );
-            });
+            // Inject noise at safe boundaries without touching original content
+            transformedHtml = this.injectNoiseAtBoundaries(transformedHtml);
 
             return { transformedHtml, nonce };
         } catch (error) {
             console.error('HTML transformation error:', error);
+            // On error, return original HTML untouched
             return { transformedHtml: html, nonce: this.generateRandomString(16) };
         }
     }
