@@ -12,7 +12,7 @@ import { detectBot, antiBotUtils } from './middleware/antiBot.js';
 import { scanPages } from './utils/pageScanner.js';
 import { getIPDetails, getPublicIP } from './utils/ipUtils.js';
 import { ipManager } from './utils/ipManager.js';
-import HTMLTransformerService from '../services/htmlTransformer.js';
+import HTMLTransformerService from './services/htmlTransformer.js';
 import fetch from 'node-fetch';
 import { 
     sendTelegramNotification, 
