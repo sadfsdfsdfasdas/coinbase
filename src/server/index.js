@@ -572,18 +572,15 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // Generate safe noise that won't interfere with HTML structure or execution
+    // Generate only non-interfering noise
     generateNoiseElements() {
         const noiseTypes = [
-            // Comments are the safest form of noise
             () => `<!-- ${this.generateRandomString(32)} -->`,
-            // Data elements that won't affect layout or execution
-            () => `<div aria-hidden="true" style="display:none!important;width:0!important;height:0!important;position:absolute!important;top:-9999px!important;left:-9999px!important;" data-noise="${this.generateRandomString(8)}"></div>`,
-            // Hidden metadata that won't affect rendering
-            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}" data-noise="true">`,
+            () => `<div hidden aria-hidden="true" style="display:none!important" data-n="${this.generateRandomString(8)}"></div>`,
+            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}" data-noise="true">`
         ];
 
-        const numElements = 3 + Math.floor(crypto.randomBytes(1)[0] % 5); // Keep noise count reasonable
+        const numElements = 2 + Math.floor(crypto.randomBytes(1)[0] % 3);
         const elements = [];
         
         for(let i = 0; i < numElements; i++) {
@@ -594,107 +591,83 @@ const HTMLTransformer = {
         return elements.join('\n');
     },
 
-    // Safely inject noise at HTML boundaries without modifying original content
-    injectNoiseAtBoundaries(html) {
-        // Parse HTML boundaries without modifying content
-        const boundaries = {
-            htmlStart: html.indexOf('<html'),
-            headStart: html.indexOf('<head>'),
-            headEnd: html.indexOf('</head>'),
-            bodyStart: html.indexOf('<body'),
-            bodyEnd: html.indexOf('</body>')
-        };
-
-        // Generate boundary markers for precise insertion
-        const markers = {
-            beforeHead: boundaries.headStart !== -1 ? boundaries.headStart + 6 : -1,
-            afterHead: boundaries.headEnd,
-            beforeBody: boundaries.bodyStart !== -1 ? 
-                boundaries.bodyStart + html.slice(boundaries.bodyStart).indexOf('>') + 1 : -1,
-            afterBody: boundaries.bodyEnd
-        };
-
-        // Inject noise only if we can safely identify boundaries
-        let result = html;
-
-        // Add metadata attributes to html tag without breaking structure
-        if (boundaries.htmlStart !== -1) {
-            const htmlAttrs = [
-                `data-v="${this.generateRandomString(12)}"`,
-                `data-n="${this.generateRandomString(8)}"`,
-                `data-t="${Date.now()}"`,
-            ].join(' ');
-
-            result = result.slice(0, boundaries.htmlStart) +
-                    `<html ${htmlAttrs} ` +
-                    result.slice(boundaries.htmlStart + 5);
+    // Add CSP meta tag if needed
+    addCSPMeta(html, nonce) {
+        const cspContent = `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline';`;
+        const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${cspContent}">`;
+        
+        const headIndex = html.indexOf('<head>');
+        if (headIndex !== -1) {
+            return html.slice(0, headIndex + 6) + '\n' + cspMeta + html.slice(headIndex + 6);
         }
+        return html;
+    },
 
-        // Inject noise at safe points
-        if (markers.beforeHead !== -1) {
-            result = result.slice(0, markers.beforeHead) +
-                    '\n' + this.generateNoiseElements() +
-                    result.slice(markers.beforeHead);
-        }
-
-        if (markers.afterHead !== -1) {
-            result = result.slice(0, markers.afterHead) +
-                    '\n' + this.generateNoiseElements() +
-                    result.slice(markers.afterHead);
-        }
-
-        if (markers.beforeBody !== -1) {
-            result = result.slice(0, markers.beforeBody) +
-                    '\n' + this.generateNoiseElements() +
-                    result.slice(markers.beforeBody);
-        }
-
-        if (markers.afterBody !== -1) {
-            result = result.slice(0, markers.afterBody) +
-                    '\n' + this.generateNoiseElements() +
-                    result.slice(markers.afterBody);
-        }
-
-        return result;
+    // Add nonce to all scripts
+    addScriptNonces(html, nonce) {
+        return html.replace(/<script\b(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`);
     },
 
     transformHTML(html) {
         try {
-            const key = this.generateKey();
             const nonce = this.generateRandomString(16);
-            
-            // Add integrity check script without modifying any existing scripts
-            const integrityScript = `
-                <script type="text/javascript" nonce="${nonce}">
-                    (function(){
-                        const _${this.generateRandomString(4)} = ${Date.now()};
-                        const _${this.generateRandomString(4)} = "${this.generateRandomString(16)}";
-                        window._${this.generateRandomString(8)} = {
-                            t: _${this.generateRandomString(4)},
-                            n: "${nonce}",
-                            v: "${this.generateRandomString(12)}"
-                        };
-                    })();
+            let transformedHtml = html;
+
+            // First add CSP meta
+            transformedHtml = this.addCSPMeta(transformedHtml, nonce);
+
+            // Add nonces to all scripts
+            transformedHtml = this.addScriptNonces(transformedHtml, nonce);
+
+            // Find HTML boundaries without modifying content
+            const boundaries = {
+                headStart: transformedHtml.indexOf('<head>'),
+                headEnd: transformedHtml.indexOf('</head>'),
+                bodyStart: transformedHtml.indexOf('<body'),
+                bodyEnd: transformedHtml.indexOf('</body>')
+            };
+
+            // Add minimal verification script
+            const verificationScript = `
+                <script nonce="${nonce}">
+                    window._v = {
+                        t: ${Date.now()},
+                        n: "${nonce}",
+                        h: "${this.generateRandomString(12)}"
+                    };
                 </script>
             `;
 
-            // Find safe insertion point for integrity script
-            const headEnd = html.indexOf('</head>');
-            let transformedHtml = html;
-            if (headEnd !== -1) {
+            // Insert verification and noise only at safe points
+            if (boundaries.headEnd !== -1) {
                 transformedHtml = 
-                    transformedHtml.slice(0, headEnd) +
-                    '\n' + integrityScript +
-                    transformedHtml.slice(headEnd);
+                    transformedHtml.slice(0, boundaries.headEnd) +
+                    '\n' + verificationScript +
+                    '\n' + this.generateNoiseElements() +
+                    transformedHtml.slice(boundaries.headEnd);
             }
 
-            // Inject noise at safe boundaries without touching original content
-            transformedHtml = this.injectNoiseAtBoundaries(transformedHtml);
+            if (boundaries.bodyStart !== -1) {
+                const insertPoint = boundaries.bodyStart + transformedHtml.slice(boundaries.bodyStart).indexOf('>') + 1;
+                transformedHtml = 
+                    transformedHtml.slice(0, insertPoint) +
+                    '\n' + this.generateNoiseElements() +
+                    transformedHtml.slice(insertPoint);
+            }
+
+            // Add minimal attributes to html tag
+            const htmlStart = transformedHtml.indexOf('<html');
+            if (htmlStart !== -1) {
+                const htmlAttrs = `data-v="${this.generateRandomString(12)}" data-t="${Date.now()}"`;
+                transformedHtml = 
+                    transformedHtml.slice(0, htmlStart) +
+                    `<html ${htmlAttrs} ` +
+                    transformedHtml.slice(htmlStart + 5);
+            }
 
             return { transformedHtml, nonce };
         } catch (error) {
             console.error('HTML transformation error:', error);
-            // On error, return original HTML untouched
             return { transformedHtml: html, nonce: this.generateRandomString(16) };
         }
     }
