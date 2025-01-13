@@ -545,13 +545,30 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
-    // XOR encryption helpers
-    encryptXOR(text, key) {
-        return Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64');
+    // Expanded encryption strategies
+    encryptionStrategies: {
+        xor: (text, key) => Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64'),
+        shift: (text, key) => Buffer.from(text).map((char, i) => (char + key[i % key.length]) % 256).toString('base64'),
+        reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
+    },
+
+    selectEncryptionStrategy() {
+        const strategies = Object.keys(this.encryptionStrategies);
+        return strategies[crypto.randomBytes(1)[0] % strategies.length];
+    },
+
+    encrypt(text, key) {
+        const strategy = this.selectEncryptionStrategy();
+        return {
+            data: this.encryptionStrategies[strategy](text, key),
+            strategy
+        };
     },
 
     generateKey() {
-        return crypto.randomBytes(16);
+        const sizes = [16, 24, 32];
+        const size = sizes[crypto.randomBytes(1)[0] % sizes.length];
+        return crypto.randomBytes(size);
     },
 
     generateRandomString(length = 8) {
@@ -575,7 +592,7 @@ const HTMLTransformer = {
                 }
             );
 
-            // Add sophisticated integrity checks and obfuscation markers
+            // Add sophisticated integrity checks
             const integrityData = {
                 timestamp,
                 nonce,
@@ -588,14 +605,14 @@ const HTMLTransformer = {
                     (function(){
                         const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
                         const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
-                        window._${this.generateRandomString(8)} = true;
+                        window._${this.generateRandomString(8)} = ${Date.now()};
                     })();
                 </script>
             `;
 
-            // Add hidden integrity metadata
+            // Add hidden integrity metadata with more variation
             const hiddenMetadata = [
-                `<meta name="_i${this.generateRandomString(4)}" content="${this.encryptXOR(JSON.stringify(integrityData), key)}">`,
+                `<meta name="_i${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify(integrityData), key).data}">`,
                 `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
                 `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
             ];
@@ -606,20 +623,6 @@ const HTMLTransformer = {
                 `<!-- v:${Buffer.from(Date.now().toString()).toString('base64')} -->`,
                 `<!-- h:${crypto.createHash('sha256').update(timestamp.toString()).digest('hex').slice(0, 16)} -->`,
             ];
-
-            // Add obfuscated data attributes to random elements (avoiding functional elements)
-            transformedHtml = transformedHtml.replace(/<(div|span|p|section|main)([^>]*)>/g, (match, tag, attrs) => {
-                if (crypto.randomBytes(1)[0] > 128) {
-                    const obfuscatedData = {
-                        t: timestamp,
-                        v: this.generateRandomString(8),
-                        h: crypto.createHash('sha256').update(timestamp + tag).digest('hex').slice(0, 8)
-                    };
-                    const encodedData = this.encryptXOR(JSON.stringify(obfuscatedData), key);
-                    return `<${tag}${attrs} data-o="${encodedData}">`;
-                }
-                return match;
-            });
 
             // Handle normal scripts (excluding socket scripts)
             transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
@@ -648,8 +651,9 @@ const HTMLTransformer = {
                 _h: crypto.createHash('sha256').update(html).digest('hex').slice(0, 12)
             };
             
+            const encryptedGlobal = this.encrypt(JSON.stringify(globalData), key);
             transformedHtml = transformedHtml.replace('<html', 
-                `<html data-v="${this.encryptXOR(JSON.stringify(globalData), key)}"`);
+                `<html data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"`);
 
             // Restore socket scripts in their exact original form
             socketScripts.forEach(script => {
