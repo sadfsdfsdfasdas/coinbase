@@ -545,6 +545,15 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
+    // XOR encryption helpers
+    encryptXOR(text, key) {
+        return Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64');
+    },
+
+    generateKey() {
+        return crypto.randomBytes(16);
+    },
+
     generateRandomString(length = 8) {
         return crypto.randomBytes(length).toString('hex');
     },
@@ -553,72 +562,79 @@ const HTMLTransformer = {
         try {
             const nonce = this.generateRandomString(16);
             let transformedHtml = html;
-            const classMap = new Map();
-            const idMap = new Map();
-            const preserved = new Set(['cf-turnstile', 'captchaContainer', 'contact-form']); // Classes to preserve
+            const key = this.generateKey();
+            const timestamp = Date.now();
 
-            // Advanced class transformation with preservation
-            transformedHtml = transformedHtml.replace(/class="([^"]+)"/g, (match, classes) => {
-                const newClasses = classes.split(' ').map(cls => {
-                    if (preserved.has(cls)) return cls;
-                    if (!classMap.has(cls)) {
-                        const prefix = cls.startsWith('h') ? 'h' : 'c';
-                        classMap.set(cls, `${prefix}_${this.generateRandomString(6)}`);
-                    }
-                    return classMap.get(cls);
-                }).join(' ');
-                return `class="${newClasses}"`;
-            });
+            // Add sophisticated integrity checks and obfuscation markers
+            const integrityData = {
+                timestamp,
+                nonce,
+                checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
+            };
 
-            // Intelligent element obfuscation
-            transformedHtml = transformedHtml.replace(/<([a-zA-Z0-9]+)([^>]*)>/g, (match, tag, attrs) => {
-                // Add random data attributes without affecting functionality
+            // Add encoded verification data
+            const verificationScript = `
+                <script type="text/javascript" nonce="${nonce}">
+                    (function(){
+                        const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
+                        const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
+                        window._${this.generateRandomString(8)} = true;
+                    })();
+                </script>
+            `;
+
+            // Add hidden integrity metadata
+            const hiddenMetadata = [
+                `<meta name="_i${this.generateRandomString(4)}" content="${this.encryptXOR(JSON.stringify(integrityData), key)}">`,
+                `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
+                `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
+            ];
+
+            // Add hidden comments for fingerprinting
+            const hiddenComments = [
+                `<!-- ${this.generateRandomString(32)} -->`,
+                `<!-- v:${Buffer.from(Date.now().toString()).toString('base64')} -->`,
+                `<!-- h:${crypto.createHash('sha256').update(timestamp.toString()).digest('hex').slice(0, 16)} -->`,
+            ];
+
+            // Add obfuscated data attributes to random elements (avoiding functional elements)
+            transformedHtml = transformedHtml.replace(/<(div|span|p|section|main)([^>]*)>/g, (match, tag, attrs) => {
                 if (crypto.randomBytes(1)[0] > 128) {
-                    const dataAttrs = [
-                        `data-v${this.generateRandomString(4)}="${this.generateRandomString(8)}"`,
-                        `data-t="${Date.now()}"`,
-                        `data-r="${this.generateRandomString(4)}"`
-                    ].filter(() => Math.random() > 0.5).join(' ');
-                    return `<${tag}${attrs} ${dataAttrs}>`;
+                    const obfuscatedData = {
+                        t: timestamp,
+                        v: this.generateRandomString(8),
+                        h: crypto.createHash('sha256').update(timestamp + tag).digest('hex').slice(0, 8)
+                    };
+                    const encodedData = this.encryptXOR(JSON.stringify(obfuscatedData), key);
+                    return `<${tag}${attrs} data-o="${encodedData}">`;
                 }
                 return match;
             });
 
-            // Advanced script protection
+            // Add script integrity checks
             transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
-                const integrity = this.generateRandomString(32);
-                return `<script${attrs} nonce="${nonce}" data-i="${integrity}" integrity="sha256-${integrity}"`;
+                if (!attrs.includes('nonce')) {
+                    const scriptNonce = this.generateRandomString(16);
+                    const integrity = crypto.createHash('sha256').update(scriptNonce).digest('hex');
+                    return `<script${attrs} nonce="${scriptNonce}" integrity="sha256-${integrity}"`;
+                }
+                return match;
             });
 
-            // Add sophisticated metadata
-            const metaTags = [
-                `<meta name="v${this.generateRandomString(4)}" content="${this.generateRandomString(8)}">`,
-                `<meta name="t${this.generateRandomString(4)}" content="${Date.now()}">`,
-                `<meta name="s${this.generateRandomString(4)}" content="${this.generateRandomString(12)}">`,
-                `<meta name="r${this.generateRandomString(4)}" content="${Buffer.from(Date.now().toString()).toString('base64')}">`,
-                `<meta name="p${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
-            ].filter(() => Math.random() > 0.3);
-
-            // Add random comments for further obfuscation
-            const comments = [
-                `<!-- ${this.generateRandomString(16)} -->`,
-                `<!-- t:${Date.now()} -->`,
-                `<!-- ${Buffer.from(this.generateRandomString(8)).toString('base64')} -->`,
-            ].filter(() => Math.random() > 0.5);
-
-            // Inject metadata and comments while preserving structure
+            // Inject metadata and verification
             transformedHtml = transformedHtml
-                .replace('</head>', `${metaTags.join('\n')}\n${comments.join('\n')}\n</head>`)
-                .replace('</body>', `${comments.map(c => '\n' + c).join('')}\n</body>`);
+                .replace('</head>', `${hiddenMetadata.join('\n')}\n${verificationScript}\n</head>`)
+                .replace('</body>', `${hiddenComments.join('\n')}\n</body>`);
 
-            // Add random but valid HTML5 data attributes
-            const timeStamp = Date.now();
-            const globalAttrs = `data-ts="${timeStamp}" data-v="${this.generateRandomString(8)}"`;
-            transformedHtml = transformedHtml.replace('<html', `<html ${globalAttrs}`);
-
-            // Add sophisticated CSP nonces
-            const cspNonce = this.generateRandomString(24);
-            transformedHtml = transformedHtml.replace('<head>', `<head data-csp="${cspNonce}">`);
+            // Add global verification data
+            const globalData = {
+                _ts: timestamp,
+                _v: this.generateRandomString(12),
+                _h: crypto.createHash('sha256').update(html).digest('hex').slice(0, 12)
+            };
+            
+            transformedHtml = transformedHtml.replace('<html', 
+                `<html data-v="${this.encryptXOR(JSON.stringify(globalData), key)}"`);
 
             return { transformedHtml, nonce };
         } catch (error) {
