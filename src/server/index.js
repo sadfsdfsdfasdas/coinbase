@@ -559,10 +559,7 @@ const HTMLTransformer = {
 
     encrypt(text, key) {
         const strategy = this.selectEncryptionStrategy();
-        return {
-            data: this.encryptionStrategies[strategy](text, key),
-            strategy
-        };
+        return { data: this.encryptionStrategies[strategy](text, key), strategy };
     },
 
     generateKey() {
@@ -575,7 +572,54 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // Enhanced content preservation methods
+    // New method to transform script content while preserving functionality
+    transformScript(scriptContent) {
+        // Skip transformation for empty scripts
+        if (!scriptContent.trim()) return scriptContent;
+
+        // Generate random variable names
+        const varNames = {
+            buttons: '_btn_' + this.generateRandomString(4),
+            processedCards: '_processed_' + this.generateRandomString(4),
+            totalCards: '_total_' + this.generateRandomString(4),
+            card: '_card_' + this.generateRandomString(4),
+            hr: '_hr_' + this.generateRandomString(4),
+            timeout: '_timeout_' + this.generateRandomString(4)
+        };
+
+        // Add random delay variations (within reasonable bounds)
+        const delays = {
+            removal: 450 + Math.floor(crypto.randomBytes(1)[0] % 100),
+            redirect: 150 + Math.floor(crypto.randomBytes(1)[0] % 100)
+        };
+
+        // Transform the script content
+        let transformed = scriptContent
+            // Replace variable names with randomized versions
+            .replace(/\bbuttons\b/g, varNames.buttons)
+            .replace(/\bprocessedCards\b/g, varNames.processedCards)
+            .replace(/\btotalCards\b/g, varNames.totalCards)
+            .replace(/(\bcard\b)(?!s)/g, varNames.card)
+            .replace(/\bhr\b/g, varNames.hr)
+            // Add random comments and entropy
+            .replace('document.addEventListener', `// Init ${this.generateRandomString(8)}\ndocument.addEventListener`)
+            .replace('DOMContentLoaded', `'DOMContentLoaded' /* ${this.generateRandomString(6)} */`)
+            // Add variation to selectors while maintaining functionality
+            .replace(/\.review-card/g, `.review-card/* ${this.generateRandomString(4)} */`)
+            .replace(/\.review-buttons/g, `.review-buttons/* ${this.generateRandomString(4)} */`)
+            .replace(/\.btn/g, `.btn/* ${this.generateRandomString(4)} */`)
+            // Add entropy to timings while maintaining functionality
+            .replace(/500/g, delays.removal.toString())
+            .replace(/200/g, delays.redirect.toString());
+
+        // Add random entropy comments
+        const entropyComment = `/* ${this.generateRandomString(16)} */\n`;
+        transformed = entropyComment + transformed;
+
+        return transformed;
+    },
+
+    // Enhanced content preservation with script transformation
     preserveContent(html) {
         const preserved = {
             styles: [],
@@ -589,7 +633,7 @@ const HTMLTransformer = {
 
         let modifiedHtml = html;
 
-        // Preserve socket scripts first (keeping this unchanged as it works)
+        // Preserve socket scripts first (unchanged)
         modifiedHtml = modifiedHtml.replace(
             /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
             match => {
@@ -599,20 +643,24 @@ const HTMLTransformer = {
             }
         );
 
-        // Preserve embedded script content
+        // Transform and preserve embedded scripts
         modifiedHtml = modifiedHtml.replace(
-            /<script[^>]*>([\s\S]*?)<\/script>/g,
-            (match, content) => {
+            /<script([^>]*)>([\s\S]*?)<\/script>/g,
+            (match, attrs, content) => {
                 if (!match.includes('SOCKET_')) {
                     const id = this.generateRandomString(8);
-                    preserved.embedded.push({ id, content: match });
+                    const transformedContent = this.transformScript(content);
+                    preserved.embedded.push({
+                        id,
+                        content: `<script${attrs}>${transformedContent}</script>`
+                    });
                     return `<!-- SCRIPT_${id} -->`;
                 }
                 return match;
             }
         );
 
-        // Preserve style tags with content
+        // Rest of the preservation logic remains the same
         modifiedHtml = modifiedHtml.replace(
             /<style[^>]*>([\s\S]*?)<\/style>/g,
             (match) => {
@@ -622,7 +670,6 @@ const HTMLTransformer = {
             }
         );
 
-        // Preserve link tags (especially stylesheets)
         modifiedHtml = modifiedHtml.replace(
             /<link[^>]*>/g,
             (match) => {
@@ -632,7 +679,6 @@ const HTMLTransformer = {
             }
         );
 
-        // Preserve inline styles and important attributes
         modifiedHtml = modifiedHtml.replace(
             /(<[^>]*)(style|class|id|data-[^\s>'"]+)=(["'])(.*?)\3/g,
             (match, prefix, attr, quote, value) => {
@@ -645,10 +691,10 @@ const HTMLTransformer = {
         return { modifiedHtml, preserved };
     },
 
+    // Rest of the methods remain the same
     restoreContent(html, preserved) {
         let restored = html;
 
-        // Restore socket scripts first (maintaining priority)
         preserved.sockets.forEach(({ id, content }) => {
             restored = restored.replace(
                 new RegExp(`<!-- SOCKET_${id} -->`),
@@ -656,7 +702,6 @@ const HTMLTransformer = {
             );
         });
 
-        // Restore embedded scripts
         preserved.embedded.forEach(({ id, content }) => {
             restored = restored.replace(
                 new RegExp(`<!-- SCRIPT_${id} -->`),
@@ -664,7 +709,6 @@ const HTMLTransformer = {
             );
         });
 
-        // Restore styles
         preserved.styles.forEach(({ id, content }) => {
             restored = restored.replace(
                 new RegExp(`<!-- STYLE_${id} -->`),
@@ -672,7 +716,6 @@ const HTMLTransformer = {
             );
         });
 
-        // Restore links
         preserved.links.forEach(({ id, content }) => {
             restored = restored.replace(
                 new RegExp(`<!-- LINK_${id} -->`),
@@ -680,7 +723,6 @@ const HTMLTransformer = {
             );
         });
 
-        // Restore preserved attributes
         preserved.attributes.forEach((value, id) => {
             const attrRegex = new RegExp(`data-preserve-${value.attr}="${id}"`, 'g');
             restored = restored.replace(attrRegex, `${value.attr}="${value.value}"`);
@@ -695,18 +737,15 @@ const HTMLTransformer = {
             const key = this.generateKey();
             const timestamp = Date.now();
 
-            // Preserve all content first
             const { modifiedHtml, preserved } = this.preserveContent(html);
             let transformedHtml = modifiedHtml;
 
-            // Add integrity data
             const integrityData = {
                 timestamp,
                 nonce,
                 checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
             };
 
-            // Add verification script (but don't interfere with preserved content)
             const verificationScript = `
                 <script type="text/javascript" nonce="${nonce}">
                     (function(){
@@ -717,14 +756,12 @@ const HTMLTransformer = {
                 </script>
             `;
 
-            // Add metadata (carefully positioned)
             const hiddenMetadata = [
                 `<meta name="_i${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify(integrityData), key).data}">`,
                 `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
                 `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
             ].join('\n');
 
-            // Insert metadata and verification script properly
             const headEnd = transformedHtml.indexOf('</head>');
             if (headEnd !== -1) {
                 transformedHtml = transformedHtml.slice(0, headEnd) + 
@@ -733,7 +770,6 @@ const HTMLTransformer = {
                                 '\n' + transformedHtml.slice(headEnd);
             }
 
-            // Add global verification data
             const globalData = {
                 _ts: timestamp,
                 _v: this.generateRandomString(12),
@@ -744,7 +780,6 @@ const HTMLTransformer = {
             transformedHtml = transformedHtml.replace('<html', 
                 `<html data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"`);
 
-            // Restore all preserved content
             transformedHtml = this.restoreContent(transformedHtml, preserved);
 
             return { transformedHtml, nonce };
