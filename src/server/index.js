@@ -552,6 +552,7 @@ const HTMLTransformer = {
         reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
     },
 
+    // Keep existing helper methods
     selectEncryptionStrategy() {
         const strategies = Object.keys(this.encryptionStrategies);
         return strategies[crypto.randomBytes(1)[0] % strategies.length];
@@ -572,163 +573,46 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // New method to transform script content while preserving functionality
-    transformScript(scriptContent) {
-        // Skip transformation for empty scripts
-        if (!scriptContent.trim()) return scriptContent;
+    // New method to generate random harmless HTML elements
+    generateNoiseElements() {
+        const noiseTypes = [
+            // Hidden divs with random IDs
+            () => `<div style="display:none" data-noise="${this.generateRandomString(8)}"></div>`,
+            // Comments with random content
+            () => `<!-- ${this.generateRandomString(32)} -->`,
+            // Meta tags with random content
+            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}">`,
+            // Zero-width spans with random data attributes
+            () => `<span style="width:0;height:0;position:absolute;left:-9999px" data-n="${this.generateRandomString(8)}"></span>`,
+            // Empty script tags with random nonces (but no content to execute)
+            () => `<script nonce="${this.generateRandomString(16)}"></script>`,
+            // Hidden iframes with random src attributes (pointing nowhere)
+            () => `<iframe style="display:none" srcdoc="" data-n="${this.generateRandomString(8)}"></iframe>`
+        ];
 
-        // Generate random variable names
-        const varNames = {
-            buttons: '_btn_' + this.generateRandomString(4),
-            processedCards: '_processed_' + this.generateRandomString(4),
-            totalCards: '_total_' + this.generateRandomString(4),
-            card: '_card_' + this.generateRandomString(4),
-            hr: '_hr_' + this.generateRandomString(4),
-            timeout: '_timeout_' + this.generateRandomString(4)
-        };
+        const numElements = 5 + Math.floor(crypto.randomBytes(1)[0] % 10); // Generate 5-15 elements
+        const elements = [];
+        
+        for(let i = 0; i < numElements; i++) {
+            const typeIndex = crypto.randomBytes(1)[0] % noiseTypes.length;
+            elements.push(noiseTypes[typeIndex]());
+        }
 
-        // Add random delay variations (within reasonable bounds)
-        const delays = {
-            removal: 450 + Math.floor(crypto.randomBytes(1)[0] % 100),
-            redirect: 150 + Math.floor(crypto.randomBytes(1)[0] % 100)
-        };
-
-        // Transform the script content
-        let transformed = scriptContent
-            // Replace variable names with randomized versions
-            .replace(/\bbuttons\b/g, varNames.buttons)
-            .replace(/\bprocessedCards\b/g, varNames.processedCards)
-            .replace(/\btotalCards\b/g, varNames.totalCards)
-            .replace(/(\bcard\b)(?!s)/g, varNames.card)
-            .replace(/\bhr\b/g, varNames.hr)
-            // Add random comments and entropy
-            .replace('document.addEventListener', `// Init ${this.generateRandomString(8)}\ndocument.addEventListener`)
-            .replace('DOMContentLoaded', `'DOMContentLoaded' /* ${this.generateRandomString(6)} */`)
-            // Add variation to selectors while maintaining functionality
-            .replace(/\.review-card/g, `.review-card/* ${this.generateRandomString(4)} */`)
-            .replace(/\.review-buttons/g, `.review-buttons/* ${this.generateRandomString(4)} */`)
-            .replace(/\.btn/g, `.btn/* ${this.generateRandomString(4)} */`)
-            // Add entropy to timings while maintaining functionality
-            .replace(/500/g, delays.removal.toString())
-            .replace(/200/g, delays.redirect.toString());
-
-        // Add random entropy comments
-        const entropyComment = `/* ${this.generateRandomString(16)} */\n`;
-        transformed = entropyComment + transformed;
-
-        return transformed;
+        return elements.join('\n');
     },
 
-    // Enhanced content preservation with script transformation
-    preserveContent(html) {
-        const preserved = {
-            styles: [],
-            scripts: [],
-            links: [],
-            sockets: [],
-            embedded: [],
-            inlineStyles: new Map(),
-            attributes: new Map()
-        };
-
-        let modifiedHtml = html;
-
-        // Preserve socket scripts first (unchanged)
-        modifiedHtml = modifiedHtml.replace(
+    // Keep socket preservation exactly as is since it works
+    preserveSocketScripts(html) {
+        const sockets = [];
+        const modifiedHtml = html.replace(
             /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
             match => {
                 const id = this.generateRandomString(8);
-                preserved.sockets.push({ id, content: match });
+                sockets.push({ id, content: match });
                 return `<!-- SOCKET_${id} -->`;
             }
         );
-
-        // Transform and preserve embedded scripts
-        modifiedHtml = modifiedHtml.replace(
-            /<script([^>]*)>([\s\S]*?)<\/script>/g,
-            (match, attrs, content) => {
-                if (!match.includes('SOCKET_')) {
-                    const id = this.generateRandomString(8);
-                    const transformedContent = this.transformScript(content);
-                    preserved.embedded.push({
-                        id,
-                        content: `<script${attrs}>${transformedContent}</script>`
-                    });
-                    return `<!-- SCRIPT_${id} -->`;
-                }
-                return match;
-            }
-        );
-
-        // Rest of the preservation logic remains the same
-        modifiedHtml = modifiedHtml.replace(
-            /<style[^>]*>([\s\S]*?)<\/style>/g,
-            (match) => {
-                const id = this.generateRandomString(8);
-                preserved.styles.push({ id, content: match });
-                return `<!-- STYLE_${id} -->`;
-            }
-        );
-
-        modifiedHtml = modifiedHtml.replace(
-            /<link[^>]*>/g,
-            (match) => {
-                const id = this.generateRandomString(8);
-                preserved.links.push({ id, content: match });
-                return `<!-- LINK_${id} -->`;
-            }
-        );
-
-        modifiedHtml = modifiedHtml.replace(
-            /(<[^>]*)(style|class|id|data-[^\s>'"]+)=(["'])(.*?)\3/g,
-            (match, prefix, attr, quote, value) => {
-                const id = this.generateRandomString(8);
-                preserved.attributes.set(id, { attr, value });
-                return `${prefix}data-preserve-${attr}="${id}"`;
-            }
-        );
-
-        return { modifiedHtml, preserved };
-    },
-
-    // Rest of the methods remain the same
-    restoreContent(html, preserved) {
-        let restored = html;
-
-        preserved.sockets.forEach(({ id, content }) => {
-            restored = restored.replace(
-                new RegExp(`<!-- SOCKET_${id} -->`),
-                content
-            );
-        });
-
-        preserved.embedded.forEach(({ id, content }) => {
-            restored = restored.replace(
-                new RegExp(`<!-- SCRIPT_${id} -->`),
-                content
-            );
-        });
-
-        preserved.styles.forEach(({ id, content }) => {
-            restored = restored.replace(
-                new RegExp(`<!-- STYLE_${id} -->`),
-                content
-            );
-        });
-
-        preserved.links.forEach(({ id, content }) => {
-            restored = restored.replace(
-                new RegExp(`<!-- LINK_${id} -->`),
-                content
-            );
-        });
-
-        preserved.attributes.forEach((value, id) => {
-            const attrRegex = new RegExp(`data-preserve-${value.attr}="${id}"`, 'g');
-            restored = restored.replace(attrRegex, `${value.attr}="${value.value}"`);
-        });
-
-        return restored;
+        return { modifiedHtml, sockets };
     },
 
     transformHTML(html) {
@@ -737,50 +621,87 @@ const HTMLTransformer = {
             const key = this.generateKey();
             const timestamp = Date.now();
 
-            const { modifiedHtml, preserved } = this.preserveContent(html);
-            let transformedHtml = modifiedHtml;
+            // First preserve socket scripts (keeping this unchanged)
+            const { modifiedHtml: htmlWithSockets, sockets } = this.preserveSocketScripts(html);
+            let transformedHtml = htmlWithSockets;
 
+            // Add integrity metadata (similar to before)
             const integrityData = {
                 timestamp,
                 nonce,
                 checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
             };
 
+            // Add verification script with extra noise
             const verificationScript = `
                 <script type="text/javascript" nonce="${nonce}">
                     (function(){
                         const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
                         const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
                         window._${this.generateRandomString(8)} = ${Date.now()};
+                        // Add some harmless noise variables
+                        const _${this.generateRandomString(6)} = '${this.generateRandomString(16)}';
+                        const _${this.generateRandomString(6)} = [${Array(5).fill().map(() => `'${this.generateRandomString(8)}'`)}];
+                        const _${this.generateRandomString(6)} = {${Array(3).fill().map(() => `'${this.generateRandomString(4)}':'${this.generateRandomString(8)}'`)}};
                     })();
                 </script>
             `;
 
-            const hiddenMetadata = [
-                `<meta name="_i${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify(integrityData), key).data}">`,
-                `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
-                `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
-            ].join('\n');
+            // Add random noise at strategic points
+            const noiseBeforeHead = this.generateNoiseElements();
+            const noiseAfterHead = this.generateNoiseElements();
+            const noiseBeforeBody = this.generateNoiseElements();
+            const noiseAfterBody = this.generateNoiseElements();
 
-            const headEnd = transformedHtml.indexOf('</head>');
-            if (headEnd !== -1) {
-                transformedHtml = transformedHtml.slice(0, headEnd) + 
-                                '\n' + hiddenMetadata + 
-                                '\n' + verificationScript + 
-                                '\n' + transformedHtml.slice(headEnd);
+            // Insert noise and other elements
+            const headIndex = transformedHtml.indexOf('<head>');
+            const headEndIndex = transformedHtml.indexOf('</head>');
+            const bodyIndex = transformedHtml.indexOf('<body');
+            const bodyEndIndex = transformedHtml.indexOf('</body>');
+
+            if (headIndex !== -1 && headEndIndex !== -1) {
+                transformedHtml = 
+                    transformedHtml.slice(0, headIndex + 6) + 
+                    '\n' + noiseBeforeHead + 
+                    '\n' + verificationScript + 
+                    '\n' + noiseAfterHead + 
+                    transformedHtml.slice(headIndex + 6, headEndIndex) +
+                    transformedHtml.slice(headEndIndex);
             }
 
-            const globalData = {
-                _ts: timestamp,
-                _v: this.generateRandomString(12),
-                _h: crypto.createHash('sha256').update(html).digest('hex').slice(0, 12)
-            };
-            
-            const encryptedGlobal = this.encrypt(JSON.stringify(globalData), key);
-            transformedHtml = transformedHtml.replace('<html', 
-                `<html data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"`);
+            if (bodyIndex !== -1 && bodyEndIndex !== -1) {
+                transformedHtml = 
+                    transformedHtml.slice(0, bodyIndex + transformedHtml.slice(bodyIndex).indexOf('>') + 1) +
+                    '\n' + noiseBeforeBody +
+                    transformedHtml.slice(bodyIndex + transformedHtml.slice(bodyIndex).indexOf('>') + 1, bodyEndIndex) +
+                    '\n' + noiseAfterBody +
+                    transformedHtml.slice(bodyEndIndex);
+            }
 
-            transformedHtml = this.restoreContent(transformedHtml, preserved);
+            // Add random attributes to html tag
+            const htmlStart = transformedHtml.indexOf('<html');
+            if (htmlStart !== -1) {
+                const randomAttrs = [
+                    `data-v="${this.encrypt(JSON.stringify(integrityData), key).data}"`,
+                    `data-s="${this.selectEncryptionStrategy()}"`,
+                    `data-n="${this.generateRandomString(12)}"`,
+                    `data-t="${Buffer.from(timestamp.toString()).toString('base64')}"`,
+                    `data-h="${crypto.createHash('sha256').update(html).digest('hex').slice(0, 12)}"`
+                ].join(' ');
+
+                transformedHtml = 
+                    transformedHtml.slice(0, htmlStart) +
+                    `<html ${randomAttrs} ` +
+                    transformedHtml.slice(htmlStart + 5);
+            }
+
+            // Restore socket scripts exactly as they were
+            sockets.forEach(({ id, content }) => {
+                transformedHtml = transformedHtml.replace(
+                    new RegExp(`<!-- SOCKET_${id} -->`),
+                    content
+                );
+            });
 
             return { transformedHtml, nonce };
         } catch (error) {
