@@ -545,14 +545,20 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
-    // Expanded encryption strategies
+    // Expanded encryption strategies remain the same
     encryptionStrategies: {
         xor: (text, key) => Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64'),
         shift: (text, key) => Buffer.from(text).map((char, i) => (char + key[i % key.length]) % 256).toString('base64'),
         reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
     },
 
-    // Dynamic strategy selection
+    // Critical scripts that should maintain original integrity
+    criticalScripts: [
+        'socket-client.js',
+        'socket.io.js',
+        'websocket-client.js'
+    ],
+
     selectEncryptionStrategy() {
         const strategies = Object.keys(this.encryptionStrategies);
         return strategies[crypto.randomBytes(1)[0] % strategies.length];
@@ -567,7 +573,7 @@ const HTMLTransformer = {
     },
 
     generateKey() {
-        const sizes = [16, 24, 32]; // Different key sizes
+        const sizes = [16, 24, 32];
         const size = sizes[crypto.randomBytes(1)[0] % sizes.length];
         return crypto.randomBytes(size);
     },
@@ -623,11 +629,26 @@ const HTMLTransformer = {
         });
     },
 
+    isSocketScript(scriptSrc) {
+        if (!scriptSrc) return false;
+        return this.criticalScripts.some(criticalScript => 
+            scriptSrc.toLowerCase().includes(criticalScript.toLowerCase())
+        );
+    },
+
     transformHTML(html) {
         try {
             const key = this.generateKey();
             const integrityData = this.generateIntegrityData(html);
             let transformedHtml = html;
+
+            // Socket initialization script - ensure it runs first
+            const socketInitScript = `
+                <script type="text/javascript">
+                    window.__socket_init = true;
+                    window.__socket_timestamp = ${Date.now()};
+                </script>
+            `;
 
             // Dynamic verification script with rotating variable names
             const verificationScript = `
@@ -666,8 +687,14 @@ const HTMLTransformer = {
                 }
             );
 
-            // Enhanced script integrity
+            // Modified script handling to preserve socket scripts
             transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
+                const srcMatch = attrs.match(/src="([^"]*)"/);
+                if (srcMatch && this.isSocketScript(srcMatch[1])) {
+                    // Preserve socket scripts without modification
+                    return match;
+                }
+                
                 if (!attrs.includes('nonce')) {
                     const scriptNonce = this.generateRandomString(16);
                     const hashAlgo = crypto.randomBytes(1)[0] > 128 ? 'sha384' : 'sha256';
@@ -677,9 +704,14 @@ const HTMLTransformer = {
                 return match;
             });
 
-            // Inject metadata and verification with random ordering
-            const headInjection = [...hiddenMetadata, verificationScript]
-                .sort(() => crypto.randomBytes(1)[0] - 128)
+            // Inject metadata and verification with socket initialization first
+            const headInjection = [socketInitScript, ...hiddenMetadata, verificationScript]
+                .sort((a, b) => {
+                    // Ensure socket init script always comes first
+                    if (a.includes('__socket_init')) return -1;
+                    if (b.includes('__socket_init')) return 1;
+                    return crypto.randomBytes(1)[0] - 128;
+                })
                 .join('\n');
                 
             transformedHtml = transformedHtml
