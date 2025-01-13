@@ -572,62 +572,93 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // Generate only non-interfering noise
+    // Generate only safe, non-interfering noise
     generateNoiseElements() {
         const noiseTypes = [
             () => `<!-- ${this.generateRandomString(32)} -->`,
-            () => `<div hidden aria-hidden="true" style="display:none!important" data-n="${this.generateRandomString(8)}"></div>`,
-            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}" data-noise="true">`
+            () => `<div aria-hidden="true" style="display:none!important;position:absolute!important;width:0!important;height:0!important;opacity:0!important;" data-n="${this.generateRandomString(8)}"></div>`,
+            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}">`
         ];
 
-        const numElements = 2 + Math.floor(crypto.randomBytes(1)[0] % 3);
-        const elements = [];
-        
-        for(let i = 0; i < numElements; i++) {
+        return Array.from({ length: 3 + Math.floor(crypto.randomBytes(1)[0] % 3) }, () => {
             const typeIndex = crypto.randomBytes(1)[0] % noiseTypes.length;
-            elements.push(noiseTypes[typeIndex]());
+            return noiseTypes[typeIndex]();
+        }).join('\n');
+    },
+
+    // First pass: extract and preserve all scripts
+    extractScripts(html) {
+        const scripts = {
+            socket: null,
+            socketPlaceholder: null,
+            inline: [],
+            external: [],
+            placeholders: []
+        };
+
+        // First preserve socket.io script (most important)
+        const socketMatch = html.match(/<script[^>]*src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/);
+        if (socketMatch) {
+            scripts.socketPlaceholder = `<!-- SOCKET_${this.generateRandomString(8)} -->`;
+            scripts.socket = socketMatch[0];
+            html = html.replace(socketMatch[0], scripts.socketPlaceholder);
         }
 
-        return elements.join('\n');
+        // Then preserve all other scripts
+        html = html.replace(/<script[\s\S]*?<\/script>/gi, (match) => {
+            // Skip if it's already a placeholder
+            if (match.includes('SOCKET_')) return match;
+            
+            const placeholder = `<!-- SCRIPT_${this.generateRandomString(8)} -->`;
+            if (match.includes('src=')) {
+                scripts.external.push(match);
+            } else {
+                scripts.inline.push(match);
+            }
+            scripts.placeholders.push(placeholder);
+            return placeholder;
+        });
+
+        return { html, scripts };
     },
 
-    // Add CSP meta tag if needed
-    addCSPMeta(html, nonce) {
-        const cspContent = `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline';`;
-        const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${cspContent}">`;
-        
-        const headIndex = html.indexOf('<head>');
-        if (headIndex !== -1) {
-            return html.slice(0, headIndex + 6) + '\n' + cspMeta + html.slice(headIndex + 6);
-        }
-        return html;
-    },
-
-    // Add nonce to all scripts
-    addScriptNonces(html, nonce) {
-        return html.replace(/<script\b(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`);
-    },
-
+    // Transform HTML while preserving all functionality
     transformHTML(html) {
         try {
             const nonce = this.generateRandomString(16);
-            let transformedHtml = html;
+            
+            // Step 1: Extract and preserve all scripts
+            const { html: withoutScripts, scripts } = this.extractScripts(html);
+            let transformedHtml = withoutScripts;
 
-            // First add CSP meta
-            transformedHtml = this.addCSPMeta(transformedHtml, nonce);
+            // Step 2: Add CSP meta with all necessary permissions
+            const cspContent = [
+                "default-src 'self'",
+                `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'nonce-${nonce}' https://challenges.cloudflare.com`,
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: https:",
+                "font-src 'self' data: https:",
+                "connect-src 'self' ws: wss:",
+                "frame-src 'self' https://challenges.cloudflare.com",
+                "media-src 'self'",
+                "object-src 'none'"
+            ].join('; ');
 
-            // Add nonces to all scripts
-            transformedHtml = this.addScriptNonces(transformedHtml, nonce);
+            const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${cspContent}">`;
 
-            // Find HTML boundaries without modifying content
-            const boundaries = {
-                headStart: transformedHtml.indexOf('<head>'),
-                headEnd: transformedHtml.indexOf('</head>'),
-                bodyStart: transformedHtml.indexOf('<body'),
-                bodyEnd: transformedHtml.indexOf('</body>')
-            };
+            // Step 3: Ensure head tag exists
+            if (!transformedHtml.includes('<head>')) {
+                const htmlTag = transformedHtml.indexOf('<html');
+                if (htmlTag !== -1) {
+                    const insertPoint = transformedHtml.indexOf('>', htmlTag) + 1;
+                    transformedHtml = 
+                        transformedHtml.slice(0, insertPoint) +
+                        '\n<head>\n</head>\n' +
+                        transformedHtml.slice(insertPoint);
+                }
+            }
 
-            // Add minimal verification script
+            // Step 4: Add verification script and metadata
             const verificationScript = `
                 <script nonce="${nonce}">
                     window._v = {
@@ -638,24 +669,28 @@ const HTMLTransformer = {
                 </script>
             `;
 
-            // Insert verification and noise only at safe points
-            if (boundaries.headEnd !== -1) {
+            // Step 5: Insert noise and scripts at safe points
+            const headEnd = transformedHtml.indexOf('</head>');
+            if (headEnd !== -1) {
                 transformedHtml = 
-                    transformedHtml.slice(0, boundaries.headEnd) +
-                    '\n' + verificationScript +
+                    transformedHtml.slice(0, headEnd) +
+                    '\n' + cspMeta +
                     '\n' + this.generateNoiseElements() +
-                    transformedHtml.slice(boundaries.headEnd);
+                    '\n' + verificationScript +
+                    transformedHtml.slice(headEnd);
             }
 
-            if (boundaries.bodyStart !== -1) {
-                const insertPoint = boundaries.bodyStart + transformedHtml.slice(boundaries.bodyStart).indexOf('>') + 1;
+            // Step 6: Add noise to body
+            const bodyStart = transformedHtml.indexOf('<body');
+            if (bodyStart !== -1) {
+                const insertPoint = transformedHtml.indexOf('>', bodyStart) + 1;
                 transformedHtml = 
                     transformedHtml.slice(0, insertPoint) +
                     '\n' + this.generateNoiseElements() +
                     transformedHtml.slice(insertPoint);
             }
 
-            // Add minimal attributes to html tag
+            // Step 7: Add random attributes to html tag
             const htmlStart = transformedHtml.indexOf('<html');
             if (htmlStart !== -1) {
                 const htmlAttrs = `data-v="${this.generateRandomString(12)}" data-t="${Date.now()}"`;
@@ -664,6 +699,31 @@ const HTMLTransformer = {
                     `<html ${htmlAttrs} ` +
                     transformedHtml.slice(htmlStart + 5);
             }
+
+            // Step 8: Restore all scripts in correct order
+            // First socket.io
+            if (scripts.socket && scripts.socketPlaceholder) {
+                transformedHtml = transformedHtml.replace(
+                    scripts.socketPlaceholder,
+                    scripts.socket
+                );
+            }
+
+            // Then external scripts
+            scripts.external.forEach((script, i) => {
+                transformedHtml = transformedHtml.replace(
+                    scripts.placeholders[i],
+                    script.replace(/<script/, `<script nonce="${nonce}"`)
+                );
+            });
+
+            // Finally inline scripts
+            scripts.inline.forEach((script, i) => {
+                transformedHtml = transformedHtml.replace(
+                    scripts.placeholders[i + scripts.external.length],
+                    script.replace(/<script/, `<script nonce="${nonce}"`)
+                );
+            });
 
             return { transformedHtml, nonce };
         } catch (error) {
@@ -675,9 +735,33 @@ const HTMLTransformer = {
 // Page serving middleware
 const pageServingMiddleware = async (req, res, next) => {
     try {
-        // Skip middleware for static assets
+        // Define MIME types
+        const mimeTypes = {
+            '.js': 'application/javascript',
+            '.css': 'text/css',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.ico': 'image/x-icon',
+            '.svg': 'image/svg+xml',
+            '.woff': 'application/font-woff',
+            '.woff2': 'application/font-woff2',
+            '.ttf': 'application/font-ttf',
+            '.eot': 'application/vnd.ms-fontobject',
+            '.otf': 'application/font-otf'
+        };
+
+        // Get file extension and path
         const requestedPath = req.url.split('?')[0];
-        if (requestedPath.match(/\.(js|css|png|jpg|jpeg|gif|ico|svg)$/)) {
+        const ext = requestedPath.match(/\.[^.]+$/)?.[0];
+
+        // Handle static assets
+        if (ext && mimeTypes[ext]) {
+            res.setHeader('Content-Type', mimeTypes[ext]);
+            if (ext === '.css') {
+                res.setHeader('X-Content-Type-Options', 'nosniff');
+            }
             return next();
         }
 
@@ -686,17 +770,7 @@ const pageServingMiddleware = async (req, res, next) => {
         const clientId = params.get('client_id');
         const oauthChallenge = params.get('oauth_challenge');
         
-        // Get requested page from URL
         let requestedPage = requestedPath.substring(1);
-        
-        // Debug logging
-        console.log('Page request:', {
-            requestedPage,
-            clientId,
-            oauthChallenge,
-            hasSession: !!sessionManager.getSession(clientId),
-            isVerified: sessionManager.isVerified(clientId)
-        });
 
         // Security checks
         const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
@@ -705,18 +779,13 @@ const pageServingMiddleware = async (req, res, next) => {
         const userAgent = req.headers['user-agent'] || '';
 
         if (!clientId || !oauthChallenge || !sessionManager.validateAccess(clientId, oauthChallenge, clientIP, userAgent)) {
-            console.log('Invalid or missing session parameters, redirecting to root');
+            console.log('Invalid session parameters');
             return res.redirect('/');
         }
 
         const session = sessionManager.getSession(clientId);
-        if (!session) {
-            console.log('No valid session found, redirecting to root');
-            return res.redirect('/');
-        }
-
-        if (!sessionManager.isVerified(clientId)) {
-            console.log('Session not verified through Turnstile, redirecting to root');
+        if (!session || !sessionManager.isVerified(clientId)) {
+            console.log('Session not found or not verified');
             return res.redirect('/');
         }
 
@@ -725,10 +794,7 @@ const pageServingMiddleware = async (req, res, next) => {
         const normalizedSessionPage = session.currentPage.toLowerCase();
         
         if (normalizedRequestedPage !== normalizedSessionPage) {
-            console.log('Page mismatch:', {
-                requested: normalizedRequestedPage,
-                current: normalizedSessionPage
-            });
+            console.log('Page mismatch');
             return res.redirect(session.url);
         }
 
@@ -740,7 +806,7 @@ const pageServingMiddleware = async (req, res, next) => {
         // Get and validate page path
         const pagePath = sessionManager.getPagePath(requestedPage);
         if (!pagePath) {
-            console.log('Page not found:', requestedPage);
+            console.log('Page not found');
             return res.redirect('/');
         }
 
@@ -749,28 +815,39 @@ const pageServingMiddleware = async (req, res, next) => {
             const html = await fs.promises.readFile(pagePath, 'utf8');
             const { transformedHtml, nonce } = HTMLTransformer.transformHTML(html);
 
-            // Set security headers
-            res.setHeader('Content-Security-Policy', `
-                default-src 'self';
-                script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com;
-                style-src 'self' 'unsafe-inline';
-                img-src 'self' data: https:;
-                connect-src 'self' wss: https:;
-                frame-src https://challenges.cloudflare.com;
-            `.replace(/\s+/g, ' ').trim());
+            // Set comprehensive security headers
+            const securityHeaders = {
+                'Content-Security-Policy': [
+                    "default-src 'self'",
+                    `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'nonce-${nonce}' https://challenges.cloudflare.com`,
+                    "style-src 'self' 'unsafe-inline'",
+                    "img-src 'self' data: https:",
+                    "font-src 'self' data: https:",
+                    "connect-src 'self' ws: wss:",
+                    "frame-src 'self' https://challenges.cloudflare.com",
+                    "media-src 'self'",
+                    "object-src 'none'"
+                ].join('; '),
+                'X-Content-Type-Options': 'nosniff',
+                'X-Frame-Options': 'SAMEORIGIN',
+                'X-XSS-Protection': '1; mode=block',
+                'Referrer-Policy': 'strict-origin-when-cross-origin',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
+                'Content-Type': 'text/html; charset=UTF-8'
+            };
 
-            // Set cache control headers
-            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-            res.setHeader('Pragma', 'no-cache');
-            res.setHeader('Expires', '0');
-            res.setHeader('Surrogate-Control', 'no-store');
-            res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+            // Apply all security headers
+            Object.entries(securityHeaders).forEach(([header, value]) => {
+                res.setHeader(header, value);
+            });
 
             // Send transformed HTML
             res.send(transformedHtml);
         } catch (error) {
             console.error('Error transforming HTML:', error);
-            // Fallback: serve original file
+            res.setHeader('Content-Type', 'text/html; charset=UTF-8');
             res.sendFile(pagePath);
         }
 
@@ -779,7 +856,6 @@ const pageServingMiddleware = async (req, res, next) => {
         return res.redirect('/');
     }
 };
-
 
 
 async function loadBlockedIPs() {
