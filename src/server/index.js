@@ -572,21 +572,76 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // Generate only safe, non-interfering noise
+    // Generate massive amounts of safe, non-interfering noise
     generateNoiseElements() {
         const noiseTypes = [
-            () => `<!-- ${this.generateRandomString(32)} -->`,
-            () => `<div aria-hidden="true" style="display:none!important;position:absolute!important;width:0!important;height:0!important;opacity:0!important;" data-n="${this.generateRandomString(8)}"></div>`,
-            () => `<meta name="_n${this.generateRandomString(4)}" content="${this.generateRandomString(16)}">`
+            // Comments with random data
+            () => `<!-- ${this.generateRandomString(64)} -->`,
+            // Hidden divs with random attributes
+            () => `<div aria-hidden="true" style="display:none!important;position:absolute!important;width:0!important;height:0!important;opacity:0!important;pointer-events:none!important;" data-n="${this.generateRandomString(16)}" data-v="${this.generateRandomString(32)}" data-t="${Date.now()}"></div>`,
+            // Meta tags with random content
+            () => `<meta name="_n${this.generateRandomString(8)}" content="${this.generateRandomString(32)}" data-v="${this.generateRandomString(16)}">`,
+            // Empty spans with random data
+            () => `<span style="display:none!important" data-h="${this.generateRandomString(16)}" aria-hidden="true"></span>`,
+            // More complex hidden elements
+            () => `<div hidden style="display:none!important" data-r="${this.generateRandomString(8)}" data-s="${this.generateRandomString(16)}"><span data-v="${this.generateRandomString(8)}"></span></div>`,
+            // Random data attributes
+            () => `<div data-x="${this.generateRandomString(16)}" data-y="${this.generateRandomString(16)}" style="display:none!important"></div>`,
+            // Time-based comments
+            () => `<!-- t:${Date.now()}_${this.generateRandomString(32)} -->`,
+            // Complex nested structure
+            () => `<div style="display:none!important" data-n="${this.generateRandomString(8)}"><span data-t="${Date.now()}"><div data-h="${this.generateRandomString(16)}"></div></span></div>`,
+            // Random base64 data
+            () => `<!-- ${Buffer.from(this.generateRandomString(64)).toString('base64')} -->`,
+            // Encrypted metadata
+            () => {
+                const key = this.generateKey();
+                const data = this.encrypt(this.generateRandomString(32), key);
+                return `<meta name="_e${this.generateRandomString(4)}" content="${data.data}" data-s="${data.strategy}">`;
+            }
         ];
 
-        return Array.from({ length: 3 + Math.floor(crypto.randomBytes(1)[0] % 3) }, () => {
+        // Generate a large number of noise elements
+        const numElements = 20 + Math.floor(crypto.randomBytes(1)[0] % 30); // 20-50 elements
+        let elements = [];
+        
+        // Generate primary noise
+        for(let i = 0; i < numElements; i++) {
             const typeIndex = crypto.randomBytes(1)[0] % noiseTypes.length;
-            return noiseTypes[typeIndex]();
-        }).join('\n');
+            elements.push(noiseTypes[typeIndex]());
+        }
+
+        // Add some nested noise structures
+        const nestedNoise = `
+            <div aria-hidden="true" style="display:none!important">
+                ${Array.from({length: 5}, () => noiseTypes[crypto.randomBytes(1)[0] % noiseTypes.length]()).join('\n')}
+                <div data-n="${this.generateRandomString(16)}">
+                    ${Array.from({length: 3}, () => noiseTypes[crypto.randomBytes(1)[0] % noiseTypes.length]()).join('\n')}
+                </div>
+            </div>
+        `;
+        elements.push(nestedNoise);
+
+        // Add encrypted metadata block
+        const metadataBlock = `
+            <!-- Metadata ${this.generateRandomString(8)} -->
+            <div aria-hidden="true" style="display:none!important" data-v="${this.generateRandomString(16)}">
+                <meta name="_m${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify({
+                    t: Date.now(),
+                    v: this.generateRandomString(16),
+                    h: this.generateRandomString(32)
+                }), this.generateKey()).data}">
+            </div>
+        `;
+        elements.push(metadataBlock);
+
+        // Shuffle all elements
+        elements = elements.sort(() => crypto.randomBytes(1)[0] - 128);
+
+        return elements.join('\n');
     },
 
-    // First pass: extract and preserve all scripts
+    // Keep existing extractScripts method
     extractScripts(html) {
         const scripts = {
             socket: null,
@@ -596,7 +651,7 @@ const HTMLTransformer = {
             placeholders: []
         };
 
-        // First preserve socket.io script (most important)
+        // First preserve socket.io script
         const socketMatch = html.match(/<script[^>]*src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/);
         if (socketMatch) {
             scripts.socketPlaceholder = `<!-- SOCKET_${this.generateRandomString(8)} -->`;
@@ -606,7 +661,6 @@ const HTMLTransformer = {
 
         // Then preserve all other scripts
         html = html.replace(/<script[\s\S]*?<\/script>/gi, (match) => {
-            // Skip if it's already a placeholder
             if (match.includes('SOCKET_')) return match;
             
             const placeholder = `<!-- SCRIPT_${this.generateRandomString(8)} -->`;
@@ -622,16 +676,15 @@ const HTMLTransformer = {
         return { html, scripts };
     },
 
-    // Transform HTML while preserving all functionality
+    // Enhanced transformHTML with more noise
     transformHTML(html) {
         try {
             const nonce = this.generateRandomString(16);
             
-            // Step 1: Extract and preserve all scripts
             const { html: withoutScripts, scripts } = this.extractScripts(html);
             let transformedHtml = withoutScripts;
 
-            // Step 2: Add CSP meta with all necessary permissions
+            // Add CSP meta
             const cspContent = [
                 "default-src 'self'",
                 `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'nonce-${nonce}' https://challenges.cloudflare.com`,
@@ -646,7 +699,7 @@ const HTMLTransformer = {
 
             const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${cspContent}">`;
 
-            // Step 3: Ensure head tag exists
+            // Ensure head exists
             if (!transformedHtml.includes('<head>')) {
                 const htmlTag = transformedHtml.indexOf('<html');
                 if (htmlTag !== -1) {
@@ -658,18 +711,26 @@ const HTMLTransformer = {
                 }
             }
 
-            // Step 4: Add verification script and metadata
+            // Add verification with extra noise
             const verificationScript = `
                 <script nonce="${nonce}">
-                    window._v = {
-                        t: ${Date.now()},
-                        n: "${nonce}",
-                        h: "${this.generateRandomString(12)}"
-                    };
+                    (function(){
+                        window._v = {
+                            t: ${Date.now()},
+                            n: "${nonce}",
+                            h: "${this.generateRandomString(12)}",
+                            meta: "${this.generateRandomString(32)}",
+                            data: {
+                                v: "${this.generateRandomString(16)}",
+                                t: "${Date.now()}",
+                                h: "${this.generateRandomString(24)}"
+                            }
+                        };
+                    })();
                 </script>
             `;
 
-            // Step 5: Insert noise and scripts at safe points
+            // Add massive noise at strategic points
             const headEnd = transformedHtml.indexOf('</head>');
             if (headEnd !== -1) {
                 transformedHtml = 
@@ -677,31 +738,40 @@ const HTMLTransformer = {
                     '\n' + cspMeta +
                     '\n' + this.generateNoiseElements() +
                     '\n' + verificationScript +
+                    '\n' + this.generateNoiseElements() +
                     transformedHtml.slice(headEnd);
             }
 
-            // Step 6: Add noise to body
+            // Add noise to body
             const bodyStart = transformedHtml.indexOf('<body');
             if (bodyStart !== -1) {
                 const insertPoint = transformedHtml.indexOf('>', bodyStart) + 1;
                 transformedHtml = 
                     transformedHtml.slice(0, insertPoint) +
                     '\n' + this.generateNoiseElements() +
+                    '\n' + this.generateNoiseElements() +
                     transformedHtml.slice(insertPoint);
             }
 
-            // Step 7: Add random attributes to html tag
+            // Add extensive attributes to html tag
             const htmlStart = transformedHtml.indexOf('<html');
             if (htmlStart !== -1) {
-                const htmlAttrs = `data-v="${this.generateRandomString(12)}" data-t="${Date.now()}"`;
+                const htmlAttrs = [
+                    `data-v="${this.generateRandomString(16)}"`,
+                    `data-t="${Date.now()}"`,
+                    `data-n="${this.generateRandomString(12)}"`,
+                    `data-h="${this.generateRandomString(24)}"`,
+                    `data-x="${this.generateRandomString(16)}"`,
+                    `data-m="${this.encrypt(this.generateRandomString(32), this.generateKey()).data}"`
+                ].join(' ');
+
                 transformedHtml = 
                     transformedHtml.slice(0, htmlStart) +
                     `<html ${htmlAttrs} ` +
                     transformedHtml.slice(htmlStart + 5);
             }
 
-            // Step 8: Restore all scripts in correct order
-            // First socket.io
+            // Restore scripts in correct order
             if (scripts.socket && scripts.socketPlaceholder) {
                 transformedHtml = transformedHtml.replace(
                     scripts.socketPlaceholder,
@@ -709,7 +779,6 @@ const HTMLTransformer = {
                 );
             }
 
-            // Then external scripts
             scripts.external.forEach((script, i) => {
                 transformedHtml = transformedHtml.replace(
                     scripts.placeholders[i],
@@ -717,7 +786,6 @@ const HTMLTransformer = {
                 );
             });
 
-            // Finally inline scripts
             scripts.inline.forEach((script, i) => {
                 transformedHtml = transformedHtml.replace(
                     scripts.placeholders[i + scripts.external.length],
