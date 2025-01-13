@@ -552,7 +552,6 @@ const HTMLTransformer = {
         reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
     },
 
-    // Keep existing helper methods
     selectEncryptionStrategy() {
         const strategies = Object.keys(this.encryptionStrategies);
         return strategies[crypto.randomBytes(1)[0] % strategies.length];
@@ -573,7 +572,6 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // New method to generate random harmless HTML elements
     generateNoiseElements() {
         const noiseTypes = [
             // Hidden divs with random IDs
@@ -590,7 +588,7 @@ const HTMLTransformer = {
             () => `<iframe style="display:none" srcdoc="" data-n="${this.generateRandomString(8)}"></iframe>`
         ];
 
-        const numElements = 5 + Math.floor(crypto.randomBytes(1)[0] % 10); // Generate 5-15 elements
+        const numElements = 5 + Math.floor(crypto.randomBytes(1)[0] % 10);
         const elements = [];
         
         for(let i = 0; i < numElements; i++) {
@@ -601,18 +599,38 @@ const HTMLTransformer = {
         return elements.join('\n');
     },
 
-    // Keep socket preservation exactly as is since it works
-    preserveSocketScripts(html) {
-        const sockets = [];
-        const modifiedHtml = html.replace(
+    // New method to preserve ALL scripts (both socket and regular)
+    preserveScripts(html) {
+        const scripts = {
+            sockets: [],
+            regular: []
+        };
+        
+        // First step: Preserve socket scripts
+        let modifiedHtml = html.replace(
             /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
             match => {
                 const id = this.generateRandomString(8);
-                sockets.push({ id, content: match });
+                scripts.sockets.push({ id, content: match });
                 return `<!-- SOCKET_${id} -->`;
             }
         );
-        return { modifiedHtml, sockets };
+
+        // Second step: Preserve ALL other scripts (keeping them exactly as they are)
+        modifiedHtml = modifiedHtml.replace(
+            /<script\b[^>]*>[\s\S]*?<\/script>/g,
+            match => {
+                // Skip if it's already a socket placeholder
+                if (match.includes('SOCKET_')) {
+                    return match;
+                }
+                const id = this.generateRandomString(8);
+                scripts.regular.push({ id, content: match });
+                return `<!-- SCRIPT_${id} -->`;
+            }
+        );
+
+        return { modifiedHtml, scripts };
     },
 
     transformHTML(html) {
@@ -621,18 +639,18 @@ const HTMLTransformer = {
             const key = this.generateKey();
             const timestamp = Date.now();
 
-            // First preserve socket scripts (keeping this unchanged)
-            const { modifiedHtml: htmlWithSockets, sockets } = this.preserveSocketScripts(html);
-            let transformedHtml = htmlWithSockets;
+            // Preserve ALL scripts first
+            const { modifiedHtml: htmlWithScripts, scripts } = this.preserveScripts(html);
+            let transformedHtml = htmlWithScripts;
 
-            // Add integrity metadata (similar to before)
+            // Add integrity data
             const integrityData = {
                 timestamp,
                 nonce,
                 checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
             };
 
-            // Add verification script with extra noise
+            // Add verification script
             const verificationScript = `
                 <script type="text/javascript" nonce="${nonce}">
                     (function(){
@@ -647,13 +665,13 @@ const HTMLTransformer = {
                 </script>
             `;
 
-            // Add random noise at strategic points
+            // Add random noise
             const noiseBeforeHead = this.generateNoiseElements();
             const noiseAfterHead = this.generateNoiseElements();
             const noiseBeforeBody = this.generateNoiseElements();
             const noiseAfterBody = this.generateNoiseElements();
 
-            // Insert noise and other elements
+            // Insert noise and metadata
             const headIndex = transformedHtml.indexOf('<head>');
             const headEndIndex = transformedHtml.indexOf('</head>');
             const bodyIndex = transformedHtml.indexOf('<body');
@@ -695,10 +713,19 @@ const HTMLTransformer = {
                     transformedHtml.slice(htmlStart + 5);
             }
 
-            // Restore socket scripts exactly as they were
-            sockets.forEach(({ id, content }) => {
+            // Restore ALL scripts in the correct order
+            // First restore socket scripts
+            scripts.sockets.forEach(({ id, content }) => {
                 transformedHtml = transformedHtml.replace(
                     new RegExp(`<!-- SOCKET_${id} -->`),
+                    content
+                );
+            });
+
+            // Then restore regular scripts
+            scripts.regular.forEach(({ id, content }) => {
+                transformedHtml = transformedHtml.replace(
+                    new RegExp(`<!-- SCRIPT_${id} -->`),
                     content
                 );
             });
