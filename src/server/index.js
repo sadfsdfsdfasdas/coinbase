@@ -570,7 +570,7 @@ const pageServingMiddleware = async (req, res, next) => {
             isVerified: sessionManager.isVerified(clientId)
         });
 
-        // If no session parameters are provided or invalid, redirect to root
+        // Security checks
         if (!clientId || !oauthChallenge || !sessionManager.validateAccess(clientId, oauthChallenge)) {
             console.log('Invalid or missing session parameters, redirecting to root');
             return res.redirect('/');
@@ -582,13 +582,12 @@ const pageServingMiddleware = async (req, res, next) => {
             return res.redirect('/');
         }
 
-        // Critical security check: Verify the session is properly verified through Turnstile
         if (!sessionManager.isVerified(clientId)) {
             console.log('Session not verified through Turnstile, redirecting to root');
             return res.redirect('/');
         }
 
-        // Ensure requested page matches session's current page
+        // Page validation
         const normalizedRequestedPage = requestedPage.replace('.html', '').toLowerCase();
         const normalizedSessionPage = session.currentPage.toLowerCase();
         
@@ -600,46 +599,53 @@ const pageServingMiddleware = async (req, res, next) => {
             return res.redirect(session.url);
         }
 
-        // Ensure we add .html to the page name if not present
+        // Ensure .html extension
         if (!requestedPage.endsWith('.html')) {
             requestedPage += '.html';
         }
 
-        // Get and validate the page path
+        // Get and validate page path
         const pagePath = sessionManager.getPagePath(requestedPage);
         if (!pagePath) {
             console.log('Page not found:', requestedPage);
             return res.redirect('/');
         }
 
-        // Read the HTML file
+        // Read and transform HTML
         console.log('Reading page for transformation:', pagePath);
         const html = await fs.readFile(pagePath, 'utf8');
+        const transformedHtml = await EnhancedHTMLTransformer.transform(html);
 
-        // Transform the HTML
-        const { transformedHtml, nonce } = await HTMLTransformerService.transformHTML(html);
+        // Generate session-specific keys
+        const pageKey = crypto.randomBytes(32).toString('base64');
+        const sessionNonce = crypto.randomBytes(16).toString('base64');
 
-        // Set security headers
+        // Set security headers with dynamic nonce
         res.setHeader('Content-Security-Policy', `
             default-src 'self';
-            script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com;
+            script-src 'self' 'nonce-${sessionNonce}' https://challenges.cloudflare.com;
             style-src 'self' 'unsafe-inline';
             img-src 'self' data: https:;
             connect-src 'self' wss: https:;
             frame-src https://challenges.cloudflare.com;
         `.replace(/\s+/g, ' ').trim());
 
+        // Set cache and security headers
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
         res.setHeader('Surrogate-Control', 'no-store');
         res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+        res.setHeader('X-Content-Security-Key', pageKey);
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('X-XSS-Protection', '1; mode=block');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
 
         // Log successful transformation
         console.log('Serving transformed page:', {
             sessionId: clientId,
             page: requestedPage,
-            nonce: nonce.substring(0, 8) + '...' // Log partial nonce for debugging
+            transformationTime: Date.now()
         });
 
         // Send transformed HTML
@@ -647,7 +653,6 @@ const pageServingMiddleware = async (req, res, next) => {
 
     } catch (error) {
         console.error('Error in page serving middleware:', error);
-        // Log detailed error for debugging
         console.error({
             errorMessage: error.message,
             stack: error.stack,
@@ -657,7 +662,6 @@ const pageServingMiddleware = async (req, res, next) => {
         res.redirect('/');
     }
 };
-
 
 
 
