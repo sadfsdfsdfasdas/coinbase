@@ -572,7 +572,9 @@ const HTMLTransformer = {
     },
 
     generateRandomString(length = 8) {
-        return crypto.randomBytes(length).toString('hex');
+        const formats = ['hex', 'base64', 'base64url'];
+        const format = formats[crypto.randomBytes(1)[0] % formats.length];
+        return crypto.randomBytes(length).toString(format);
     },
 
     transformHTML(html) {
@@ -582,13 +584,40 @@ const HTMLTransformer = {
             const key = this.generateKey();
             const timestamp = Date.now();
 
-            // First, extract and preserve socket scripts
-            const socketScripts = [];
+            // First, extract and preserve socket scripts and critical elements
+            const preservedElements = new Map();
+            let preserveCounter = 0;
+
+            // Preserve socket scripts
             transformedHtml = transformedHtml.replace(
                 /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
                 match => {
-                    socketScripts.push(match);
-                    return '<!-- SOCKET_SCRIPT_PLACEHOLDER -->';
+                    const placeholder = `<!-- PRESERVED_ELEMENT_${preserveCounter} -->`;
+                    preservedElements.set(placeholder, match);
+                    preserveCounter++;
+                    return placeholder;
+                }
+            );
+
+            // Preserve forms and inputs (to maintain functionality)
+            transformedHtml = transformedHtml.replace(
+                /<form\b[^>]*>[\s\S]*?<\/form>/gi,
+                match => {
+                    const placeholder = `<!-- PRESERVED_ELEMENT_${preserveCounter} -->`;
+                    preservedElements.set(placeholder, match);
+                    preserveCounter++;
+                    return placeholder;
+                }
+            );
+
+            // Preserve class and style attributes (to maintain looks)
+            transformedHtml = transformedHtml.replace(
+                /(<[^>]+?)(class|style)="[^"]*"/gi,
+                (match) => {
+                    const placeholder = `<!-- PRESERVED_ELEMENT_${preserveCounter} -->`;
+                    preservedElements.set(placeholder, match);
+                    preserveCounter++;
+                    return placeholder;
                 }
             );
 
@@ -610,7 +639,7 @@ const HTMLTransformer = {
                 </script>
             `;
 
-            // Add hidden integrity metadata with more variation
+            // Add hidden integrity metadata
             const hiddenMetadata = [
                 `<meta name="_i${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify(integrityData), key).data}">`,
                 `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
@@ -624,17 +653,17 @@ const HTMLTransformer = {
                 `<!-- h:${crypto.createHash('sha256').update(timestamp.toString()).digest('hex').slice(0, 16)} -->`,
             ];
 
-            // Handle normal scripts (excluding socket scripts)
+            // Handle normal scripts (excluding preserved elements)
             transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
-                // Skip socket scripts (they were already replaced with placeholders)
-                if (match.includes('SOCKET_SCRIPT_PLACEHOLDER')) {
+                if (match.includes('PRESERVED_ELEMENT_')) {
                     return match;
                 }
                 
                 if (!attrs.includes('nonce')) {
                     const scriptNonce = this.generateRandomString(16);
-                    const integrity = crypto.createHash('sha256').update(scriptNonce).digest('hex');
-                    return `<script${attrs} nonce="${scriptNonce}" integrity="sha256-${integrity}"`;
+                    const hashAlgo = crypto.randomBytes(1)[0] > 128 ? 'sha384' : 'sha256';
+                    const integrity = crypto.createHash(hashAlgo).update(scriptNonce).digest('base64');
+                    return `<script${attrs} nonce="${scriptNonce}" integrity="${hashAlgo}-${integrity}"`;
                 }
                 return match;
             });
@@ -655,10 +684,10 @@ const HTMLTransformer = {
             transformedHtml = transformedHtml.replace('<html', 
                 `<html data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"`);
 
-            // Restore socket scripts in their exact original form
-            socketScripts.forEach(script => {
-                transformedHtml = transformedHtml.replace('<!-- SOCKET_SCRIPT_PLACEHOLDER -->', script);
-            });
+            // Restore all preserved elements in their original form
+            for (const [placeholder, original] of preservedElements) {
+                transformedHtml = transformedHtml.replace(placeholder, original);
+            }
 
             return { transformedHtml, nonce };
         } catch (error) {
@@ -667,7 +696,6 @@ const HTMLTransformer = {
         }
     }
 };
-
 // Page serving middleware
 const pageServingMiddleware = async (req, res, next) => {
     try {
