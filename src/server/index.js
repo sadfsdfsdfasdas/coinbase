@@ -545,13 +545,14 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
-    // Expanded encryption strategies
+    // Existing encryption strategies
     encryptionStrategies: {
         xor: (text, key) => Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64'),
         shift: (text, key) => Buffer.from(text).map((char, i) => (char + key[i % key.length]) % 256).toString('base64'),
         reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
     },
 
+    // Helper functions remain the same
     selectEncryptionStrategy() {
         const strategies = Object.keys(this.encryptionStrategies);
         return strategies[crypto.randomBytes(1)[0] % strategies.length];
@@ -575,58 +576,107 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
+    // New helper methods for style handling
+    preserveStyles(html) {
+        const styleElements = [];
+        let modifiedHtml = html.replace(
+            /<style[^>]*>([\s\S]*?)<\/style>/g,
+            (match, styleContent) => {
+                const placeholder = `<!-- STYLE_PLACEHOLDER_${this.generateRandomString(8)} -->`;
+                styleElements.push({ placeholder, content: match });
+                return placeholder;
+            }
+        );
+
+        const linkElements = [];
+        modifiedHtml = modifiedHtml.replace(
+            /<link[^>]*rel=["']stylesheet["'][^>]*>/g,
+            (match) => {
+                const placeholder = `<!-- LINK_PLACEHOLDER_${this.generateRandomString(8)} -->`;
+                linkElements.push({ placeholder, content: match });
+                return placeholder;
+            }
+        );
+
+        return { modifiedHtml, styleElements, linkElements };
+    },
+
+    // New method to handle inline styles
+    preserveInlineStyles(html) {
+        const inlineStyles = new Map();
+        const modifiedHtml = html.replace(
+            /style=["'](.*?)["']/g,
+            (match, styleContent) => {
+                const key = this.generateRandomString(8);
+                inlineStyles.set(key, styleContent);
+                return `data-style-ref="${key}"`;
+            }
+        );
+        return { modifiedHtml, inlineStyles };
+    },
+
+    // Enhanced transform method
     transformHTML(html) {
         try {
             const nonce = this.generateRandomString(16);
-            let transformedHtml = html;
             const key = this.generateKey();
             const timestamp = Date.now();
 
-            // First, extract and preserve socket scripts
+            // First, preserve all styles
+            const { modifiedHtml: htmlWithStylePlaceholders, styleElements, linkElements } = this.preserveStyles(html);
+            
+            // Then preserve inline styles
+            const { modifiedHtml: htmlWithInlineStylesPreserved, inlineStyles } = this.preserveInlineStyles(htmlWithStylePlaceholders);
+            
+            let transformedHtml = htmlWithInlineStylesPreserved;
+
+            // Extract and preserve socket scripts
             const socketScripts = [];
             transformedHtml = transformedHtml.replace(
                 /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
                 match => {
                     socketScripts.push(match);
-                    return '<!-- SOCKET_SCRIPT_PLACEHOLDER -->';
+                    return `<!-- SOCKET_SCRIPT_PLACEHOLDER_${this.generateRandomString(8)} -->`;
                 }
             );
 
-            // Add sophisticated integrity checks
+            // Add integrity checks
             const integrityData = {
                 timestamp,
                 nonce,
                 checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
             };
 
-            // Add encoded verification data
+            // Add verification script with style restoration
             const verificationScript = `
                 <script type="text/javascript" nonce="${nonce}">
                     (function(){
                         const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
                         const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
                         window._${this.generateRandomString(8)} = ${Date.now()};
+                        
+                        // Restore inline styles
+                        const styleMap = ${JSON.stringify(Object.fromEntries(inlineStyles))};
+                        document.querySelectorAll('[data-style-ref]').forEach(el => {
+                            const styleRef = el.getAttribute('data-style-ref');
+                            if (styleMap[styleRef]) {
+                                el.setAttribute('style', styleMap[styleRef]);
+                                el.removeAttribute('data-style-ref');
+                            }
+                        });
                     })();
                 </script>
             `;
 
-            // Add hidden integrity metadata with more variation
+            // Add metadata and hidden elements
             const hiddenMetadata = [
                 `<meta name="_i${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify(integrityData), key).data}">`,
                 `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
                 `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
             ];
 
-            // Add hidden comments for fingerprinting
-            const hiddenComments = [
-                `<!-- ${this.generateRandomString(32)} -->`,
-                `<!-- v:${Buffer.from(Date.now().toString()).toString('base64')} -->`,
-                `<!-- h:${crypto.createHash('sha256').update(timestamp.toString()).digest('hex').slice(0, 16)} -->`,
-            ];
-
-            // Handle normal scripts (excluding socket scripts)
+            // Handle normal scripts
             transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
-                // Skip socket scripts (they were already replaced with placeholders)
                 if (match.includes('SOCKET_SCRIPT_PLACEHOLDER')) {
                     return match;
                 }
@@ -639,10 +689,27 @@ const HTMLTransformer = {
                 return match;
             });
 
-            // Inject metadata and verification
+            // Restore styles and add verification
             transformedHtml = transformedHtml
-                .replace('</head>', `${hiddenMetadata.join('\n')}\n${verificationScript}\n</head>`)
-                .replace('</body>', `${hiddenComments.join('\n')}\n</body>`);
+                .replace('</head>', `${hiddenMetadata.join('\n')}\n${verificationScript}\n</head>`);
+
+            // Restore style elements
+            styleElements.forEach(({ placeholder, content }) => {
+                transformedHtml = transformedHtml.replace(placeholder, content);
+            });
+
+            // Restore link elements
+            linkElements.forEach(({ placeholder, content }) => {
+                transformedHtml = transformedHtml.replace(placeholder, content);
+            });
+
+            // Restore socket scripts
+            socketScripts.forEach((script, index) => {
+                transformedHtml = transformedHtml.replace(
+                    new RegExp(`<!-- SOCKET_SCRIPT_PLACEHOLDER_[a-f0-9]{16} -->`), 
+                    script
+                );
+            });
 
             // Add global verification data
             const globalData = {
@@ -654,11 +721,6 @@ const HTMLTransformer = {
             const encryptedGlobal = this.encrypt(JSON.stringify(globalData), key);
             transformedHtml = transformedHtml.replace('<html', 
                 `<html data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"`);
-
-            // Restore socket scripts in their exact original form
-            socketScripts.forEach(script => {
-                transformedHtml = transformedHtml.replace('<!-- SOCKET_SCRIPT_PLACEHOLDER -->', script);
-            });
 
             return { transformedHtml, nonce };
         } catch (error) {
