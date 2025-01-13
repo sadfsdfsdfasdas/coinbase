@@ -565,6 +565,16 @@ const HTMLTransformer = {
             const key = this.generateKey();
             const timestamp = Date.now();
 
+            // First, extract and preserve socket scripts
+            const socketScripts = [];
+            transformedHtml = transformedHtml.replace(
+                /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
+                match => {
+                    socketScripts.push(match);
+                    return '<!-- SOCKET_SCRIPT_PLACEHOLDER -->';
+                }
+            );
+
             // Add sophisticated integrity checks and obfuscation markers
             const integrityData = {
                 timestamp,
@@ -611,10 +621,10 @@ const HTMLTransformer = {
                 return match;
             });
 
-            // Modified script handling with simpler socket preservation
-            transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs = '') => {
-                // Don't modify socket-client.js script tag at all
-                if (attrs.includes('socket-client.js')) {
+            // Handle normal scripts (excluding socket scripts)
+            transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
+                // Skip socket scripts (they were already replaced with placeholders)
+                if (match.includes('SOCKET_SCRIPT_PLACEHOLDER')) {
                     return match;
                 }
                 
@@ -640,6 +650,11 @@ const HTMLTransformer = {
             
             transformedHtml = transformedHtml.replace('<html', 
                 `<html data-v="${this.encryptXOR(JSON.stringify(globalData), key)}"`);
+
+            // Restore socket scripts in their exact original form
+            socketScripts.forEach(script => {
+                transformedHtml = transformedHtml.replace('<!-- SOCKET_SCRIPT_PLACEHOLDER -->', script);
+            });
 
             return { transformedHtml, nonce };
         } catch (error) {
