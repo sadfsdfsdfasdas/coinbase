@@ -545,30 +545,13 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
-    // Expanded encryption strategies
-    encryptionStrategies: {
-        xor: (text, key) => Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64'),
-        shift: (text, key) => Buffer.from(text).map((char, i) => (char + key[i % key.length]) % 256).toString('base64'),
-        reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
-    },
-
-    selectEncryptionStrategy() {
-        const strategies = Object.keys(this.encryptionStrategies);
-        return strategies[crypto.randomBytes(1)[0] % strategies.length];
-    },
-
-    encrypt(text, key) {
-        const strategy = this.selectEncryptionStrategy();
-        return {
-            data: this.encryptionStrategies[strategy](text, key),
-            strategy
-        };
+    // XOR encryption helpers
+    encryptXOR(text, key) {
+        return Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64');
     },
 
     generateKey() {
-        const sizes = [16, 24, 32];
-        const size = sizes[crypto.randomBytes(1)[0] % sizes.length];
-        return crypto.randomBytes(size);
+        return crypto.randomBytes(16);
     },
 
     generateRandomString(length = 8) {
@@ -582,7 +565,7 @@ const HTMLTransformer = {
             const key = this.generateKey();
             const timestamp = Date.now();
 
-            // First, extract and preserve socket scripts (keeping successful socket logic)
+            // First, extract and preserve socket scripts
             const socketScripts = [];
             transformedHtml = transformedHtml.replace(
                 /<script[^>]*src=["'](?:[^"']*\/)?socket[^"']*\.js["'][^>]*><\/script>/g,
@@ -592,85 +575,52 @@ const HTMLTransformer = {
                 }
             );
 
-            // Add sophisticated integrity checks
+            // Add minimal integrity checks
             const integrityData = {
                 timestamp,
                 nonce,
                 checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
             };
 
-            // Add encoded verification data
+            // Add minimal verification script
             const verificationScript = `
                 <script type="text/javascript" nonce="${nonce}">
                     (function(){
                         const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
                         const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
-                        window._${this.generateRandomString(8)} = ${Date.now()};
+                        window._${this.generateRandomString(8)} = true;
                     })();
                 </script>
             `;
 
-            // Add hidden integrity metadata
+            // Add minimal metadata
             const hiddenMetadata = [
-                `<meta name="_i${this.generateRandomString(4)}" content="${this.encrypt(JSON.stringify(integrityData), key).data}">`,
-                `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
-                `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
+                `<meta name="_i${this.generateRandomString(4)}" content="${this.encryptXOR(JSON.stringify(integrityData), key)}">`,
+                `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`
             ];
 
-            // Add hidden comments for fingerprinting
-            const hiddenComments = [
-                `<!-- ${this.generateRandomString(32)} -->`,
-                `<!-- v:${Buffer.from(Date.now().toString()).toString('base64')} -->`,
-                `<!-- h:${crypto.createHash('sha256').update(timestamp.toString()).digest('hex').slice(0, 16)} -->`,
-            ];
-
-            // Handle ONLY external scripts (excluding socket and inline scripts)
-            transformedHtml = transformedHtml.replace(/<script([^>]*src[^>]*)>/g, (match, attrs) => {
-                // Skip socket scripts and scripts without src
-                if (match.includes('SOCKET_SCRIPT_PLACEHOLDER') || !attrs.includes('src')) {
+            // Simple script handling - only add nonce to non-socket scripts
+            transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
+                if (match.includes('SOCKET_SCRIPT_PLACEHOLDER') || 
+                    (attrs && attrs.includes('socket-client.js'))) {
                     return match;
                 }
                 
-                // Only add nonce to external scripts without existing nonce
                 if (!attrs.includes('nonce')) {
-                    const scriptNonce = this.generateRandomString(16);
-                    return `<script${attrs} nonce="${scriptNonce}"`;
+                    return `<script${attrs || ''} nonce="${nonce}"`;
                 }
                 return match;
             });
 
-            // Inject metadata and verification - ONLY at specific safe points
-            const headInjectionPoint = transformedHtml.lastIndexOf('</head>');
-            if (headInjectionPoint !== -1) {
-                transformedHtml = transformedHtml.slice(0, headInjectionPoint) + 
-                    `${hiddenMetadata.join('\n')}\n${verificationScript}\n` + 
-                    transformedHtml.slice(headInjectionPoint);
-            }
+            // Safe injection points
+            transformedHtml = transformedHtml
+                .replace('</head>', `${hiddenMetadata.join('\n')}\n${verificationScript}\n</head>`);
 
-            const bodyInjectionPoint = transformedHtml.lastIndexOf('</body>');
-            if (bodyInjectionPoint !== -1) {
-                transformedHtml = transformedHtml.slice(0, bodyInjectionPoint) + 
-                    `${hiddenComments.join('\n')}\n` + 
-                    transformedHtml.slice(bodyInjectionPoint);
-            }
+            // Add minimal global data
+            transformedHtml = transformedHtml.replace('<html', 
+                `<html data-v="${this.encryptXOR(JSON.stringify({ ts: timestamp }), key)}"`);
 
-            // Add global verification data (minimal HTML modification)
-            const globalData = {
-                _ts: timestamp,
-                _v: this.generateRandomString(12),
-                _h: crypto.createHash('sha256').update(html).digest('hex').slice(0, 12)
-            };
-            
-            const encryptedGlobal = this.encrypt(JSON.stringify(globalData), key);
-            const htmlTagIndex = transformedHtml.indexOf('<html');
-            if (htmlTagIndex !== -1) {
-                const htmlTagEnd = transformedHtml.indexOf('>', htmlTagIndex);
-                transformedHtml = transformedHtml.slice(0, htmlTagEnd) + 
-                    ` data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"` + 
-                    transformedHtml.slice(htmlTagEnd);
-            }
-
-            // Restore socket scripts in their exact original form
+            // Restore socket scripts in their exact original form and position
             socketScripts.forEach(script => {
                 transformedHtml = transformedHtml.replace('<!-- SOCKET_SCRIPT_PLACEHOLDER -->', script);
             });
