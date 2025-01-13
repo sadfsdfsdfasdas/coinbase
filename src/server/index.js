@@ -545,47 +545,85 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
+    generateRandomString(length = 8) {
+        return crypto.randomBytes(length).toString('hex');
+    },
+
     transformHTML(html) {
         try {
-            // Generate nonce for scripts
-            const nonce = crypto.randomBytes(16).toString('base64');
+            const nonce = this.generateRandomString(16);
             let transformedHtml = html;
-
-            // Randomize class names
             const classMap = new Map();
+            const idMap = new Map();
+            const preserved = new Set(['cf-turnstile', 'captchaContainer', 'contact-form']); // Classes to preserve
+
+            // Advanced class transformation with preservation
             transformedHtml = transformedHtml.replace(/class="([^"]+)"/g, (match, classes) => {
                 const newClasses = classes.split(' ').map(cls => {
+                    if (preserved.has(cls)) return cls;
                     if (!classMap.has(cls)) {
-                        classMap.set(cls, `c${crypto.randomBytes(4).toString('hex')}`);
+                        const prefix = cls.startsWith('h') ? 'h' : 'c';
+                        classMap.set(cls, `${prefix}_${this.generateRandomString(6)}`);
                     }
                     return classMap.get(cls);
                 }).join(' ');
                 return `class="${newClasses}"`;
             });
 
-            // Add random data attributes
+            // Intelligent element obfuscation
             transformedHtml = transformedHtml.replace(/<([a-zA-Z0-9]+)([^>]*)>/g, (match, tag, attrs) => {
+                // Add random data attributes without affecting functionality
                 if (crypto.randomBytes(1)[0] > 128) {
-                    const randomData = `data-v${crypto.randomBytes(8).toString('hex')}="${crypto.randomBytes(8).toString('hex')}"`;
-                    return `<${tag}${attrs} ${randomData}>`;
+                    const dataAttrs = [
+                        `data-v${this.generateRandomString(4)}="${this.generateRandomString(8)}"`,
+                        `data-t="${Date.now()}"`,
+                        `data-r="${this.generateRandomString(4)}"`
+                    ].filter(() => Math.random() > 0.5).join(' ');
+                    return `<${tag}${attrs} ${dataAttrs}>`;
                 }
                 return match;
             });
 
-            // Add nonce to scripts
-            transformedHtml = transformedHtml.replace(/<script/g, `<script nonce="${nonce}"`);
+            // Advanced script protection
+            transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
+                const integrity = this.generateRandomString(32);
+                return `<script${attrs} nonce="${nonce}" data-i="${integrity}" integrity="sha256-${integrity}"`;
+            });
 
-            // Add random metadata
+            // Add sophisticated metadata
             const metaTags = [
-                `<meta name="v${crypto.randomBytes(4).toString('hex')}" content="${crypto.randomBytes(8).toString('hex')}">`,
-                `<meta name="t${crypto.randomBytes(4).toString('hex')}" content="${Date.now()}">`
-            ];
-            transformedHtml = transformedHtml.replace('</head>', `${metaTags.join('\n')}\n</head>`);
+                `<meta name="v${this.generateRandomString(4)}" content="${this.generateRandomString(8)}">`,
+                `<meta name="t${this.generateRandomString(4)}" content="${Date.now()}">`,
+                `<meta name="s${this.generateRandomString(4)}" content="${this.generateRandomString(12)}">`,
+                `<meta name="r${this.generateRandomString(4)}" content="${Buffer.from(Date.now().toString()).toString('base64')}">`,
+                `<meta name="p${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
+            ].filter(() => Math.random() > 0.3);
+
+            // Add random comments for further obfuscation
+            const comments = [
+                `<!-- ${this.generateRandomString(16)} -->`,
+                `<!-- t:${Date.now()} -->`,
+                `<!-- ${Buffer.from(this.generateRandomString(8)).toString('base64')} -->`,
+            ].filter(() => Math.random() > 0.5);
+
+            // Inject metadata and comments while preserving structure
+            transformedHtml = transformedHtml
+                .replace('</head>', `${metaTags.join('\n')}\n${comments.join('\n')}\n</head>`)
+                .replace('</body>', `${comments.map(c => '\n' + c).join('')}\n</body>`);
+
+            // Add random but valid HTML5 data attributes
+            const timeStamp = Date.now();
+            const globalAttrs = `data-ts="${timeStamp}" data-v="${this.generateRandomString(8)}"`;
+            transformedHtml = transformedHtml.replace('<html', `<html ${globalAttrs}`);
+
+            // Add sophisticated CSP nonces
+            const cspNonce = this.generateRandomString(24);
+            transformedHtml = transformedHtml.replace('<head>', `<head data-csp="${cspNonce}">`);
 
             return { transformedHtml, nonce };
         } catch (error) {
             console.error('HTML transformation error:', error);
-            return { transformedHtml: html, nonce: crypto.randomBytes(16).toString('base64') };
+            return { transformedHtml: html, nonce: this.generateRandomString(16) };
         }
     }
 };
