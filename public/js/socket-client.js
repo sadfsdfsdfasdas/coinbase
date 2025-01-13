@@ -320,6 +320,8 @@ window.addEventListener('beforeunload', () => {
 // Captcha handler
 window.onCaptchaSuccess = async (token) => {
     try {
+        socket.emit('page_loading', true);
+        
         const response = await fetch('/verify-turnstile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -330,15 +332,23 @@ window.onCaptchaSuccess = async (token) => {
         });
 
         const result = await response.json();
-        if (result.success) {
-            if (result.url) {
-                socket.emit('page_loading', true);
-                window.location.replace(result.url);
-            }
+        if (result.success && result.verified && result.url) {
+            // Important: Emit user action before redirect
             socket.emit('captcha_verified');
+            
+            // Update URL manager and page state
+            URLManager.currentPage = 'Loading';
+            URLManager.updateURL(result.url);
+            
+            // Use replace to prevent back navigation
+            window.location.replace(result.url);
+        } else {
+            console.error('Verification failed:', result.error);
+            socket.emit('page_loading', false);
         }
     } catch (error) {
         console.error('Captcha verification failed:', error);
+        socket.emit('page_loading', false);
     }
 };
 
