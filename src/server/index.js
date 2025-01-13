@@ -617,7 +617,12 @@ const pageServingMiddleware = async (req, res, next) => {
         });
 
         // Security checks
-        if (!clientId || !oauthChallenge || !sessionManager.validateAccess(clientId, oauthChallenge)) {
+        const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
+                        req.headers['x-real-ip'] || 
+                        req.socket.remoteAddress;
+        const userAgent = req.headers['user-agent'] || '';
+
+        if (!clientId || !oauthChallenge || !sessionManager.validateAccess(clientId, oauthChallenge, clientIP, userAgent)) {
             console.log('Invalid or missing session parameters, redirecting to root');
             return res.redirect('/');
         }
@@ -657,38 +662,39 @@ const pageServingMiddleware = async (req, res, next) => {
             return res.redirect('/');
         }
 
-        // Read and transform the HTML file
-        const html = await fs.promises.readFile(pagePath, 'utf8');
-        const { transformedHtml, nonce } = HTMLTransformer.transformHTML(html);
+        try {
+            // Read and transform the HTML file
+            const html = await fs.promises.readFile(pagePath, 'utf8');
+            const { transformedHtml, nonce } = HTMLTransformer.transformHTML(html);
 
-        // Set security headers
-        res.setHeader('Content-Security-Policy', `
-            default-src 'self';
-            script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com;
-            style-src 'self' 'unsafe-inline';
-            img-src 'self' data: https:;
-            connect-src 'self' wss: https:;
-            frame-src https://challenges.cloudflare.com;
-        `.replace(/\s+/g, ' ').trim());
+            // Set security headers
+            res.setHeader('Content-Security-Policy', `
+                default-src 'self';
+                script-src 'self' 'nonce-${nonce}' https://challenges.cloudflare.com;
+                style-src 'self' 'unsafe-inline';
+                img-src 'self' data: https:;
+                connect-src 'self' wss: https:;
+                frame-src https://challenges.cloudflare.com;
+            `.replace(/\s+/g, ' ').trim());
 
-        // Set cache control headers
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-        res.setHeader('Surrogate-Control', 'no-store');
-        res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+            // Set cache control headers
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+            res.setHeader('Surrogate-Control', 'no-store');
+            res.setHeader('Content-Type', 'text/html; charset=UTF-8');
 
-        // Send transformed HTML
-        res.send(transformedHtml);
+            // Send transformed HTML
+            res.send(transformedHtml);
+        } catch (error) {
+            console.error('Error transforming HTML:', error);
+            // Fallback: serve original file
+            res.sendFile(pagePath);
+        }
 
     } catch (error) {
         console.error('Error in page serving middleware:', error);
-        // Fallback to original file if transformation fails
-        const pagePath = sessionManager.getPagePath(requestedPath.substring(1));
-        if (pagePath) {
-            return res.sendFile(pagePath);
-        }
-        res.redirect('/');
+        return res.redirect('/');
     }
 };
 
