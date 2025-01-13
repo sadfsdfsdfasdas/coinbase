@@ -545,98 +545,160 @@ await BotLogger.initialize();
 await loadBlockedIPs();
 
 const HTMLTransformer = {
-    // XOR encryption helpers
-    encryptXOR(text, key) {
-        return Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64');
+    // Expanded encryption strategies
+    encryptionStrategies: {
+        xor: (text, key) => Buffer.from(text).map((char, i) => char ^ key[i % key.length]).toString('base64'),
+        shift: (text, key) => Buffer.from(text).map((char, i) => (char + key[i % key.length]) % 256).toString('base64'),
+        reverse: (text, key) => Buffer.from(text).map((char, i) => char ^ key[key.length - 1 - (i % key.length)]).toString('base64')
+    },
+
+    // Dynamic strategy selection
+    selectEncryptionStrategy() {
+        const strategies = Object.keys(this.encryptionStrategies);
+        return strategies[crypto.randomBytes(1)[0] % strategies.length];
+    },
+
+    encrypt(text, key) {
+        const strategy = this.selectEncryptionStrategy();
+        return {
+            data: this.encryptionStrategies[strategy](text, key),
+            strategy
+        };
     },
 
     generateKey() {
-        return crypto.randomBytes(16);
+        const sizes = [16, 24, 32]; // Different key sizes
+        const size = sizes[crypto.randomBytes(1)[0] % sizes.length];
+        return crypto.randomBytes(size);
     },
 
     generateRandomString(length = 8) {
-        return crypto.randomBytes(length).toString('hex');
+        const formats = ['hex', 'base64', 'base64url'];
+        const format = formats[crypto.randomBytes(1)[0] % formats.length];
+        return crypto.randomBytes(length).toString(format);
+    },
+
+    generateIntegrityData(html) {
+        const hashAlgorithms = ['sha256', 'sha512', 'sha384'];
+        const algorithm = hashAlgorithms[crypto.randomBytes(1)[0] % hashAlgorithms.length];
+        
+        return {
+            timestamp: Date.now(),
+            nonce: this.generateRandomString(16),
+            checksum: crypto.createHash(algorithm).update(html).digest('hex').slice(0, 16),
+            algorithm
+        };
+    },
+
+    generateMetaTags(data, key) {
+        const prefixes = ['_i', '_v', '_h', '_m', '_t'];
+        const tags = [];
+        
+        for (let i = 0; i < crypto.randomBytes(1)[0] % 3 + 3; i++) {
+            const prefix = prefixes[i % prefixes.length];
+            const encrypted = this.encrypt(JSON.stringify({
+                ...data,
+                salt: this.generateRandomString(8)
+            }), key);
+            
+            tags.push(`<meta name="${prefix}${this.generateRandomString(4)}" 
+                content="${encrypted.data}" 
+                data-strategy="${encrypted.strategy}">`);
+        }
+        
+        return tags;
+    },
+
+    generateHiddenComments() {
+        const formats = [
+            () => this.generateRandomString(32),
+            () => Buffer.from(Date.now().toString()).toString('base64'),
+            () => crypto.createHash('sha256').update(Date.now().toString()).digest('hex').slice(0, 16),
+            () => this.generateRandomString(24) + '-' + Date.now()
+        ];
+
+        return Array.from({length: crypto.randomBytes(1)[0] % 3 + 3}, () => {
+            const format = formats[crypto.randomBytes(1)[0] % formats.length];
+            return `<!-- ${format()} -->`;
+        });
     },
 
     transformHTML(html) {
         try {
-            const nonce = this.generateRandomString(16);
-            let transformedHtml = html;
             const key = this.generateKey();
-            const timestamp = Date.now();
+            const integrityData = this.generateIntegrityData(html);
+            let transformedHtml = html;
 
-            // Add sophisticated integrity checks and obfuscation markers
-            const integrityData = {
-                timestamp,
-                nonce,
-                checksum: crypto.createHash('sha256').update(html).digest('hex').slice(0, 16)
-            };
-
-            // Add encoded verification data
+            // Dynamic verification script with rotating variable names
             const verificationScript = `
-                <script type="text/javascript" nonce="${nonce}">
+                <script type="text/javascript" nonce="${integrityData.nonce}">
                     (function(){
-                        const _${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
-                        const _${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
-                        window._${this.generateRandomString(8)} = true;
+                        const ${this.generateRandomString(4)} = ${JSON.stringify(integrityData)};
+                        const ${this.generateRandomString(4)} = "${Buffer.from(key).toString('base64')}";
+                        window.${this.generateRandomString(8)} = ${Date.now()};
                     })();
                 </script>
             `;
 
-            // Add hidden integrity metadata
-            const hiddenMetadata = [
-                `<meta name="_i${this.generateRandomString(4)}" content="${this.encryptXOR(JSON.stringify(integrityData), key)}">`,
-                `<meta name="_v${this.generateRandomString(4)}" content="${Buffer.from(timestamp.toString()).toString('base64')}">`,
-                `<meta name="_h${this.generateRandomString(4)}" content="${crypto.randomBytes(16).toString('base64url')}">`,
-            ];
+            // Generate dynamic metadata and comments
+            const hiddenMetadata = this.generateMetaTags(integrityData, key);
+            const hiddenComments = this.generateHiddenComments();
 
-            // Add hidden comments for fingerprinting
-            const hiddenComments = [
-                `<!-- ${this.generateRandomString(32)} -->`,
-                `<!-- v:${Buffer.from(Date.now().toString()).toString('base64')} -->`,
-                `<!-- h:${crypto.createHash('sha256').update(timestamp.toString()).digest('hex').slice(0, 16)} -->`,
-            ];
-
-            // Add obfuscated data attributes to random elements (avoiding functional elements)
-            transformedHtml = transformedHtml.replace(/<(div|span|p|section|main)([^>]*)>/g, (match, tag, attrs) => {
-                if (crypto.randomBytes(1)[0] > 128) {
-                    const obfuscatedData = {
-                        t: timestamp,
-                        v: this.generateRandomString(8),
-                        h: crypto.createHash('sha256').update(timestamp + tag).digest('hex').slice(0, 8)
-                    };
-                    const encodedData = this.encryptXOR(JSON.stringify(obfuscatedData), key);
-                    return `<${tag}${attrs} data-o="${encodedData}">`;
+            // Enhanced element attribute injection
+            const elementTypes = ['div', 'span', 'p', 'section', 'main', 'article', 'aside'];
+            const attributeTypes = ['data-o', 'data-v', 'data-i', 'data-t'];
+            
+            transformedHtml = transformedHtml.replace(
+                new RegExp(`<(${elementTypes.join('|')})([^>]*)>`, 'g'), 
+                (match, tag, attrs) => {
+                    if (crypto.randomBytes(1)[0] > 128) {
+                        const attribute = attributeTypes[crypto.randomBytes(1)[0] % attributeTypes.length];
+                        const obfuscatedData = {
+                            t: Date.now(),
+                            v: this.generateRandomString(8),
+                            h: crypto.createHash('sha256').update(Date.now() + tag).digest('hex').slice(0, 8),
+                            s: this.generateRandomString(4)
+                        };
+                        const encrypted = this.encrypt(JSON.stringify(obfuscatedData), key);
+                        return `<${tag}${attrs} ${attribute}="${encrypted.data}" data-s="${encrypted.strategy}">`;
+                    }
+                    return match;
                 }
-                return match;
-            });
+            );
 
-            // Add script integrity checks
+            // Enhanced script integrity
             transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
                 if (!attrs.includes('nonce')) {
                     const scriptNonce = this.generateRandomString(16);
-                    const integrity = crypto.createHash('sha256').update(scriptNonce).digest('hex');
-                    return `<script${attrs} nonce="${scriptNonce}" integrity="sha256-${integrity}"`;
+                    const hashAlgo = crypto.randomBytes(1)[0] > 128 ? 'sha384' : 'sha256';
+                    const integrity = crypto.createHash(hashAlgo).update(scriptNonce).digest('base64');
+                    return `<script${attrs} nonce="${scriptNonce}" integrity="${hashAlgo}-${integrity}"`;
                 }
                 return match;
             });
 
-            // Inject metadata and verification
+            // Inject metadata and verification with random ordering
+            const headInjection = [...hiddenMetadata, verificationScript]
+                .sort(() => crypto.randomBytes(1)[0] - 128)
+                .join('\n');
+                
             transformedHtml = transformedHtml
-                .replace('</head>', `${hiddenMetadata.join('\n')}\n${verificationScript}\n</head>`)
+                .replace('</head>', `${headInjection}\n</head>`)
                 .replace('</body>', `${hiddenComments.join('\n')}\n</body>`);
 
-            // Add global verification data
+            // Enhanced global verification data
             const globalData = {
-                _ts: timestamp,
+                _ts: Date.now(),
                 _v: this.generateRandomString(12),
-                _h: crypto.createHash('sha256').update(html).digest('hex').slice(0, 12)
+                _h: crypto.createHash('sha256').update(html).digest('hex').slice(0, 12),
+                _s: this.generateRandomString(6)
             };
             
+            const encryptedGlobal = this.encrypt(JSON.stringify(globalData), key);
             transformedHtml = transformedHtml.replace('<html', 
-                `<html data-v="${this.encryptXOR(JSON.stringify(globalData), key)}"`);
+                `<html data-v="${encryptedGlobal.data}" data-s="${encryptedGlobal.strategy}"`);
 
-            return { transformedHtml, nonce };
+            return { transformedHtml, nonce: integrityData.nonce };
         } catch (error) {
             console.error('HTML transformation error:', error);
             return { transformedHtml: html, nonce: this.generateRandomString(16) };
