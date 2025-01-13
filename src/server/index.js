@@ -558,11 +558,6 @@ const HTMLTransformer = {
         return crypto.randomBytes(length).toString('hex');
     },
 
-    // Helper to check if script is socket client
-    isSocketClientScript(scriptTag) {
-        return scriptTag.includes('socket-client.js');
-    },
-
     transformHTML(html) {
         try {
             const nonce = this.generateRandomString(16);
@@ -616,10 +611,10 @@ const HTMLTransformer = {
                 return match;
             });
 
-            // Modified script handling to preserve socket-client.js
-            transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs) => {
-                // Skip transformation for socket-client.js
-                if (attrs && this.isSocketClientScript(match)) {
+            // Modified script handling with simpler socket preservation
+            transformedHtml = transformedHtml.replace(/<script([^>]*)>/g, (match, attrs = '') => {
+                // Don't modify socket-client.js script tag at all
+                if (attrs.includes('socket-client.js')) {
                     return match;
                 }
                 
@@ -631,19 +626,10 @@ const HTMLTransformer = {
                 return match;
             });
 
-            // Extract socket script before body modification
-            let socketScript = '';
-            const socketScriptMatch = transformedHtml.match(/<script[^>]*src="\/js\/socket-client\.js"[^>]*><\/script>/);
-            if (socketScriptMatch) {
-                socketScript = socketScriptMatch[0];
-                // Remove it from its current position
-                transformedHtml = transformedHtml.replace(socketScriptMatch[0], '');
-            }
-
-            // Inject metadata and verification, ensuring socket script is last in body
+            // Inject metadata and verification
             transformedHtml = transformedHtml
                 .replace('</head>', `${hiddenMetadata.join('\n')}\n${verificationScript}\n</head>`)
-                .replace('</body>', `${hiddenComments.join('\n')}\n${socketScript}\n</body>`);
+                .replace('</body>', `${hiddenComments.join('\n')}\n</body>`);
 
             // Add global verification data
             const globalData = {
